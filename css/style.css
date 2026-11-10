@@ -87,7 +87,7 @@ body {
   background-color: #f0fdf4 !important;
 }
 
-/* 傳統紅色職章樣式 */
+/* 傳統紅色職章樣式 (只顯示 姓名 + 年月日) */
 .traditional-seal {
   display: inline-flex;
   flex-direction: column;
@@ -96,28 +96,28 @@ body {
   border: 2.5px solid #dc2626;
   color: #dc2626;
   border-radius: 4px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   font-family: 'DFKai-SB', 'BiauKai', 'Noto Serif TC', serif;
   font-weight: 800;
-  line-height: 1.15;
+  line-height: 1.2;
   letter-spacing: 1px;
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.95);
   transform: rotate(-2deg);
   box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.25);
   user-select: none;
 }
 
-/* A4 紙張預覽與列印 */
+/* A4 紙張預覽：移除固定 297mm 最小高度，避免列印與匯出 PDF 超出單頁產生空白頁 */
 .a4-sheet.portrait {
   width: 210mm;
-  min-height: 297mm;
-  padding: 12mm 14mm;
+  height: auto;
+  padding: 10mm 12mm;
   box-sizing: border-box;
 }
 .a4-sheet.landscape {
   width: 297mm;
-  min-height: 210mm;
-  padding: 10mm 12mm;
+  height: auto;
+  padding: 8mm 10mm;
   box-sizing: border-box;
 }
 .pdf-table {
@@ -136,26 +136,55 @@ body {
   font-weight: 700;
 }
 
+/* 列印專用規則：徹底消除非列印容器高度，防止多出一頁空白頁 */
+@page {
+  margin: 8mm;
+}
+
 @media print {
-  body * {
-    visibility: hidden;
-  }
-  #pdf-modal,
-  #pdf-render-container,
-  #pdf-render-container * {
-    visibility: visible;
-  }
-  #pdf-modal {
-    position: absolute;
-    left: 0;
-    top: 0;
-    background: white;
-    padding: 0;
-    margin: 0;
-  }
-  .a4-sheet {
-    box-shadow: none !important;
+  html,
+  body {
+    height: auto !important;
+    min-height: 0 !important;
     margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+  }
+
+  #login-screen,
+  #app-shell,
+  #toast-container,
+  #pdf-modal-toolbar {
+    display: none !important;
+  }
+
+  #pdf-modal,
+  #pdf-modal-body {
+    position: static !important;
+    display: block !important;
     width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: transparent !important;
+  }
+
+  #pdf-render-container,
+  .a4-sheet.portrait,
+  .a4-sheet.landscape {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    page-break-after: avoid !important;
+    page-break-inside: avoid !important;
+    break-after: avoid !important;
+    break-inside: avoid !important;
   }
 }
