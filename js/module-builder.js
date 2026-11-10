@@ -1,14 +1,42 @@
 /**
- * 模組 2：設計表單（直接嵌入 EXCEL 試算表介面）
- * - 支援匯入 EXCEL (.xlsx / .xls / .csv) 自動解析表頭、分類跨欄列、上下限數值與勾選格式，一鍵自動生成表單
- * - 支援直接從桌面 Excel 框選區域複製並於試算表內按 Ctrl+V 貼上
- * - 加入「填寫週期」設定（每月、每季、半年、每年）
- * - 內嵌式 Excel 試算表介面：含 Excel 功能區 (Ribbon)、座標方塊 (A1)、fx 資料編輯列、鍵盤方向鍵/Enter/Tab 導覽
+ * 模組 2：設計表單（完整內嵌式 EXCEL 試算表介面）
+ * - 支援上下欄位合併 (rowspan) 與左右欄位合併 (colspan)：可滑鼠拖曳/Shift+點擊選取範圍一鍵「合併儲存格」，或直接調整合併列數/欄數
+ * - 支援表格內容對齊：靠左 (left)、置中 (center)、靠右 (right)
+ * - 支援調整字型大小 (10px ~ 24px)、粗體 (B)、斜體 (I)、儲存格背景色、文字顏色、列高與欄寬設定
+ * - 支援 Ctrl+Z 復原、直接從 Excel 複製貼上 (Ctrl+V)、匯入 Excel (.xlsx/.xls/.csv) 自動解析上下/左右合併並生成表單
  */
 window.ModuleBuilder = {
   selectedColId: null,
   selectedRowId: null,
-  pendingImportData: null, // 暫存解析後的 Excel 結構供確認視窗使用
+  selectionScope: 'cell', // 'cell' | 'col' | 'row'
+  rangeStart: null,       // { rIdx, cIdx }
+  rangeEnd: null,         // { rIdx, cIdx }
+  isMouseDragging: false,
+  undoStack: [],
+  pendingImportData: null,
+  FONT_SIZES: [10, 11, 12, 13, 14, 16, 18, 20, 24],
+
+  pushUndoState(tpl) {
+    if (!tpl) return;
+    const snap = JSON.stringify({ columns: tpl.columns, rows: tpl.rows });
+    if (this.undoStack.length > 0 && this.undoStack[this.undoStack.length - 1] === snap) return;
+    this.undoStack.push(snap);
+    if (this.undoStack.length > 25) this.undoStack.shift();
+  },
+
+  undo() {
+    const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
+    if (!tpl || this.undoStack.length === 0) {
+      App.toast('目前已是最初步驟，無可復原紀錄', 'info');
+      return;
+    }
+    const prev = JSON.parse(this.undoStack.pop());
+    tpl.columns = prev.columns;
+    tpl.rows = prev.rows;
+    DB.save();
+    this.render();
+    App.toast('已復原上一步變更 (Ctrl+Z)', 'info');
+  },
 
   render() {
     const container = document.getElementById('view-builder');
@@ -45,9 +73,12 @@ window.ModuleBuilder = {
       : null;
 
     const colLetter = activeColIdx >= 0 ? this.getColumnLetter(activeColIdx) : 'A';
-    const cellCoord = activeRow ? `${colLetter}${activeRowIdx + 1}` : `${colLetter}1`;
+    const rangeCoordText = this.getRangeCoordDisplay(tpl, colLetter, activeRowIdx);
+
     const hasCellOverride = Boolean(activeCell && activeCell.override && Object.keys(activeCell.override).length > 0);
     const effFormat = (activeCell && hasCellOverride) ? Object.assign({}, activeCol, activeCell.override) : (activeCol || { type: 'text' });
+    const styleInfo = App.getEffectiveCellStyle(activeCol || {}, activeCell || {});
+
     const formulaBarVal = activeRow
       ? (activeRow.isSection ? (activeRow.sectionTitle || '') : (activeCell?.value === true ? 'true' : (activeCell?.value ?? '')))
       : '';
@@ -86,6 +117,10 @@ window.ModuleBuilder = {
         </div>
 
         <div class="flex items-center gap-2">
+          <button onclick="ModuleBuilder.undo()" title="復原上一步 (Ctrl+Z)"
+            class="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-bold flex items-center gap-1">
+            <i class="fa-solid fa-rotate-left"></i> 復原
+          </button>
           <button onclick="ModuleBuilder.saveTemplateNow()"
             class="px-3.5 py-1 rounded-lg bg-white text-[#107c41] hover:bg-emerald-50 text-xs font-extrabold shadow flex items-center gap-1.5">
             <i class="fa-solid fa-floppy-disk"></i> 儲存表單
@@ -94,7 +129,7 @@ window.ModuleBuilder = {
       </div>
 
       <!-- ==================== 2. 表單屬性列 (表單名稱、編號、標籤、填寫週期) ==================== -->
-      <div class="bg-slate-100 border-b border-slate-300 px-3 sm:px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs shrink-0">
+      <div class="bg-slate-100 border-b border-slate-300 px-3 sm:px-4 py-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs shrink-0">
         <div class="flex items-center gap-1.5 flex-1 min-w-[200px]">
           <span class="font-bold text-slate-600 shrink-0">表單名稱：</span>
           <input type="text" value="${tpl.name}" onchange="ModuleBuilder.updateMeta('name', this.value)"
@@ -124,35 +159,136 @@ window.ModuleBuilder = {
         </div>
       </div>
 
-      <!-- ==================== 3. EXCEL 互動式格式功能區 (Ribbon Toolbar) ==================== -->
-      <div class="bg-white border-b border-slate-300 px-3 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
-        <!-- 左側：行列增刪與結構操作 -->
+      <!-- ==================== 3. EXCEL 多功能格式工具列 (Ribbon Toolbar) ==================== -->
+      <div class="bg-white border-b border-slate-300 px-3 sm:px-4 py-2 flex flex-col gap-2 text-xs shrink-0">
+
+        <!-- 第一排：字型大小、粗斜體、靠左/置中/靠右對齊、色彩、上下與左右合併儲存格、行列增刪 -->
         <div class="flex flex-wrap items-center gap-1.5">
-          <button onclick="ModuleBuilder.addRow()" class="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold border border-slate-300">
-            <i class="fa-solid fa-plus text-emerald-600 mr-1"></i>插入列
-          </button>
-          <button onclick="ModuleBuilder.addSectionRow()" class="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold border border-slate-300">
-            <i class="fa-solid fa-grip-lines text-blue-600 mr-1"></i>插入分類標題列
-          </button>
-          <button onclick="ModuleBuilder.addColumn()" class="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold border border-slate-300">
-            <i class="fa-solid fa-table-columns text-indigo-600 mr-1"></i>插入欄
-          </button>
-          ${activeRow ? `
-            <button onclick="ModuleBuilder.deleteRow('${activeRow.id}')" class="px-2.5 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 font-bold border border-red-200">
-              <i class="fa-solid fa-trash-can mr-1"></i>刪第 ${activeRowIdx + 1} 列
+          <!-- 字型大小 -->
+          <div class="flex items-center gap-1 bg-slate-50 border border-slate-300 rounded-lg px-2 py-0.5" title="調整字型大小">
+            <i class="fa-solid fa-text-height text-slate-500 text-[11px]"></i>
+            <select onchange="ModuleBuilder.applyStyleToSelection('fontSize', parseInt(this.value, 10))"
+              class="bg-transparent font-mono font-bold text-slate-800 focus:outline-none cursor-pointer">
+              ${this.FONT_SIZES.map(sz => `<option value="${sz}" ${styleInfo.fontSize === sz ? 'selected' : ''}>${sz} pt</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- 粗體 / 斜體 -->
+          <div class="inline-flex rounded-lg border border-slate-300 overflow-hidden bg-slate-50">
+            <button type="button" onclick="ModuleBuilder.applyStyleToSelection('bold', !${styleInfo.bold})"
+              title="粗體 (Bold)"
+              class="w-7 h-7 flex items-center justify-center font-serif font-black transition ${styleInfo.bold ? 'bg-[#107c41] text-white' : 'text-slate-700 hover:bg-slate-200'}">
+              B
             </button>
-          ` : ''}
-          ${activeCol && tpl.columns.length > 1 ? `
-            <button onclick="ModuleBuilder.deleteColumn('${activeCol.id}')" class="px-2.5 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 font-bold border border-red-200">
-              <i class="fa-solid fa-xmark mr-1"></i>刪 ${colLetter} 欄
+            <button type="button" onclick="ModuleBuilder.applyStyleToSelection('italic', !${styleInfo.italic})"
+              title="斜體 (Italic)"
+              class="w-7 h-7 flex items-center justify-center font-serif italic font-bold border-l border-slate-300 transition ${styleInfo.italic ? 'bg-[#107c41] text-white' : 'text-slate-700 hover:bg-slate-200'}">
+              I
             </button>
-          ` : ''}
+          </div>
+
+          <!-- 對齊方式：靠左、置中、靠右 -->
+          <div class="inline-flex rounded-lg border border-slate-300 overflow-hidden bg-slate-50">
+            <button type="button" onclick="ModuleBuilder.applyStyleToSelection('align', 'left')"
+              title="靠左對齊"
+              class="px-2.5 h-7 flex items-center gap-1 font-bold transition ${styleInfo.align === 'left' ? 'bg-[#107c41] text-white' : 'text-slate-700 hover:bg-slate-200'}">
+              <i class="fa-solid fa-align-left"></i><span class="hidden sm:inline">靠左</span>
+            </button>
+            <button type="button" onclick="ModuleBuilder.applyStyleToSelection('align', 'center')"
+              title="置中對齊"
+              class="px-2.5 h-7 flex items-center gap-1 font-bold border-x border-slate-300 transition ${styleInfo.align === 'center' ? 'bg-[#107c41] text-white' : 'text-slate-700 hover:bg-slate-200'}">
+              <i class="fa-solid fa-align-center"></i><span class="hidden sm:inline">置中</span>
+            </button>
+            <button type="button" onclick="ModuleBuilder.applyStyleToSelection('align', 'right')"
+              title="靠右對齊"
+              class="px-2.5 h-7 flex items-center gap-1 font-bold transition ${styleInfo.align === 'right' ? 'bg-[#107c41] text-white' : 'text-slate-700 hover:bg-slate-200'}">
+              <i class="fa-solid fa-align-right"></i><span class="hidden sm:inline">靠右</span>
+            </button>
+          </div>
+
+          <!-- 背景底色與文字顏色 -->
+          <div class="inline-flex items-center gap-1 bg-slate-50 border border-slate-300 rounded-lg px-2 h-7">
+            <label class="flex items-center gap-1 cursor-pointer" title="儲存格背景底色">
+              <i class="fa-solid fa-fill-drip text-slate-600 text-[11px]"></i>
+              <input type="color" value="${styleInfo.bgColor || '#ffffff'}"
+                onchange="ModuleBuilder.applyStyleToSelection('bgColor', this.value)"
+                class="w-4 h-4 border-0 p-0 bg-transparent cursor-pointer" />
+            </label>
+            <span class="text-slate-300">|</span>
+            <label class="flex items-center gap-1 cursor-pointer" title="文字顏色">
+              <i class="fa-solid fa-font text-slate-600 text-[11px]"></i>
+              <input type="color" value="${styleInfo.textColor || '#1e293b'}"
+                onchange="ModuleBuilder.applyStyleToSelection('textColor', this.value)"
+                class="w-4 h-4 border-0 p-0 bg-transparent cursor-pointer" />
+            </label>
+            <button type="button" onclick="ModuleBuilder.clearSelectionColors()" title="清除底色與字色"
+              class="text-[10px] text-slate-400 hover:text-red-600 ml-0.5">
+              <i class="fa-solid fa-eraser"></i>
+            </button>
+          </div>
+
+          <span class="text-slate-300 hidden sm:inline">|</span>
+
+          <!-- 上下與左右合併儲存格控制區 -->
+          <div class="flex flex-wrap items-center gap-1.5 bg-emerald-50/90 border border-emerald-300 rounded-lg px-2.5 py-0.5">
+            <button type="button" onclick="ModuleBuilder.mergeSelectedRange()"
+              title="將目前滑鼠拖曳或 Shift 選取的區域合併為單一儲存格"
+              class="px-2 py-0.5 rounded bg-[#107c41] hover:bg-emerald-800 text-white font-bold flex items-center gap-1 shadow-sm">
+              <i class="fa-solid fa-object-group"></i> 合併選取範圍
+            </button>
+            <button type="button" onclick="ModuleBuilder.unmergeSelectedRange()"
+              title="取消合併並還原為獨立儲存格"
+              class="px-2 py-0.5 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold">
+              取消合併
+            </button>
+
+            ${activeRow && !activeRow.isSection && activeCell ? `
+              <span class="text-emerald-300">|</span>
+              <span class="font-bold text-emerald-950">左右合併(欄)：</span>
+              <input type="number" min="1" max="${tpl.columns.length}" value="${activeCell.colspan || 1}"
+                onchange="ModuleBuilder.updateCellProp('${activeRow.id}','${activeCol.id}','colspan',parseInt(this.value,10)||1)"
+                class="w-11 border border-emerald-400 rounded px-1 py-0.5 font-mono text-center bg-white font-bold" />
+              <span class="font-bold text-emerald-950">上下合併(列)：</span>
+              <input type="number" min="1" max="${tpl.rows.length}" value="${activeCell.rowspan || 1}"
+                onchange="ModuleBuilder.updateCellProp('${activeRow.id}','${activeCol.id}','rowspan',parseInt(this.value,10)||1)"
+                class="w-11 border border-emerald-400 rounded px-1 py-0.5 font-mono text-center bg-white font-bold" />
+            ` : ''}
+          </div>
+
+          <span class="text-slate-300 hidden sm:inline">|</span>
+
+          <!-- 行列增刪快捷按鈕 -->
+          <div class="flex flex-wrap items-center gap-1">
+            <button onclick="ModuleBuilder.addRow()" class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold border border-slate-300">
+              <i class="fa-solid fa-plus text-emerald-600 mr-0.5"></i>加列
+            </button>
+            <button onclick="ModuleBuilder.addSectionRow()" class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold border border-slate-300">
+              <i class="fa-solid fa-grip-lines text-blue-600 mr-0.5"></i>分類列
+            </button>
+            <button onclick="ModuleBuilder.addColumn()" class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold border border-slate-300">
+              <i class="fa-solid fa-table-columns text-indigo-600 mr-0.5"></i>加欄
+            </button>
+            ${activeRow ? `
+              <button onclick="ModuleBuilder.duplicateRow('${activeRow.id}')" title="複製目前選取列"
+                class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold border border-slate-300">
+                複製列
+              </button>
+              <button onclick="ModuleBuilder.deleteRow('${activeRow.id}')" class="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 font-bold border border-red-200">
+                刪第${activeRowIdx + 1}列
+              </button>
+            ` : ''}
+            ${activeCol && tpl.columns.length > 1 ? `
+              <button onclick="ModuleBuilder.deleteColumn('${activeCol.id}')" class="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 font-bold border border-red-200">
+                刪${colLetter}欄
+              </button>
+            ` : ''}
+          </div>
         </div>
 
-        <!-- 右側：選取欄位 / 單一儲存格格式設定列 -->
+        <!-- 第二排：資料格式設定（數值上下限、勾選、下拉清單、SUM 加總、日期、欄寬、列高、唯讀） -->
         ${activeCol ? `
-          <div class="flex flex-wrap items-center gap-2 bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200">
-            <span class="font-extrabold text-[#107c41]">${colLetter}欄 (${activeCol.title}) 整欄格式：</span>
+          <div class="flex flex-wrap items-center gap-2 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-200">
+            <span class="font-extrabold text-[#107c41]">${colLetter}欄 (${activeCol.title}) 整欄型態：</span>
             <select onchange="ModuleBuilder.updateColumnProp('${activeCol.id}','type',this.value)"
               class="border border-slate-300 rounded px-2 py-0.5 font-bold bg-white">
               <option value="text" ${activeCol.type === 'text' ? 'selected' : ''}>文字</option>
@@ -163,16 +299,21 @@ window.ModuleBuilder = {
               <option value="date" ${activeCol.type === 'date' ? 'selected' : ''}>日期</option>
             </select>
 
-            <span class="text-slate-400">|</span>
-
-            <span class="font-bold text-slate-600">欄寬：</span>
+            <span class="font-bold text-slate-600 ml-1">欄寬(px)：</span>
             <input type="number" value="${activeCol.width || 120}"
               onchange="ModuleBuilder.updateColumnProp('${activeCol.id}','width',parseInt(this.value,10)||120)"
-              class="w-16 border border-slate-300 rounded px-1.5 py-0.5 font-mono text-center bg-white" />
+              class="w-14 border border-slate-300 rounded px-1.5 py-0.5 font-mono text-center bg-white" />
+
+            ${activeRow ? `
+              <span class="font-bold text-slate-600">列高(px)：</span>
+              <input type="number" value="${activeRow.height || 36}"
+                onchange="ModuleBuilder.updateRowHeight('${activeRow.id}', parseInt(this.value,10)||36)"
+                class="w-14 border border-slate-300 rounded px-1.5 py-0.5 font-mono text-center bg-white" />
+            ` : ''}
 
             ${activeRow && !activeRow.isSection && activeCell ? `
-              <span class="text-slate-400">|</span>
-              <span class="font-extrabold text-purple-800">儲存格 [${cellCoord}] 格式：</span>
+              <span class="text-slate-300">|</span>
+              <span class="font-extrabold text-purple-800">儲存格 [${colLetter}${activeRowIdx + 1}] 獨立型態：</span>
               <select onchange="ModuleBuilder.setCellOverrideType('${activeRow.id}','${activeCol.id}',this.value)"
                 class="border border-purple-300 rounded px-2 py-0.5 font-bold bg-purple-50 text-purple-900">
                 <option value="" ${!hasCellOverride ? 'selected' : ''}>跟隨 ${colLetter} 欄 (${this.getTypeShortName(activeCol.type)})</option>
@@ -188,13 +329,8 @@ window.ModuleBuilder = {
                 <input type="checkbox" ${activeCell.readOnly ? 'checked' : ''}
                   onchange="ModuleBuilder.updateCellProp('${activeRow.id}','${activeCol.id}','readOnly',this.checked)"
                   class="accent-[#107c41]" />
-                <span>唯讀</span>
+                <span>唯讀固定字</span>
               </label>
-
-              <span class="font-bold text-slate-600 ml-1">跨欄：</span>
-              <input type="number" min="1" max="${tpl.columns.length}" value="${activeCell.colspan || 1}"
-                onchange="ModuleBuilder.updateCellProp('${activeRow.id}','${activeCol.id}','colspan',parseInt(this.value,10)||1)"
-                class="w-12 border border-slate-300 rounded px-1 py-0.5 font-mono text-center bg-white" />
             ` : ''}
 
             ${this.renderInlineParameterControls(activeCol, activeRow, activeCell, hasCellOverride, effFormat)}
@@ -204,23 +340,23 @@ window.ModuleBuilder = {
 
       <!-- ==================== 4. EXCEL 座標方塊與 fx 資料編輯列 ==================== -->
       <div class="bg-slate-50 border-b border-slate-300 px-3 py-1.5 flex items-center gap-2 text-xs shrink-0">
-        <div id="excel-name-box" class="w-20 px-2 py-1 bg-white border border-slate-300 rounded font-mono font-extrabold text-center text-[#107c41] select-none">
-          ${cellCoord}
+        <div id="excel-name-box" class="min-w-[76px] px-2 py-1 bg-white border border-slate-300 rounded font-mono font-extrabold text-center text-[#107c41] select-none">
+          ${rangeCoordText}
         </div>
         <div class="font-serif italic font-black text-slate-500 px-1.5 select-none">fx</div>
         <input type="text" id="excel-formula-input" value="${String(formulaBarVal).replace(/"/g, '&quot;')}"
-          placeholder="在此輸入儲存格內容或預設值（亦支援於下方試算表直接按 Ctrl+V 貼上 Excel 表格內容）..."
+          placeholder="在此輸入儲存格內容或預設值（按住 Shift 點擊或滑鼠拖曳可選取多格進行上下/左右合併與對齊設定）..."
           oninput="ModuleBuilder.onFormulaBarInput(this.value)"
           class="flex-1 bg-white border border-slate-300 rounded px-3 py-1 text-xs focus:outline-none focus:border-[#107c41]" />
-        <span class="text-[11px] text-slate-400 hidden xl:inline">提示：點擊欄頭文字可直接修改欄位名稱；支援方向鍵與直接從 Excel 複製貼上</span>
       </div>
 
       <!-- ==================== 5. 內嵌式 EXCEL 試算表主工作區 ==================== -->
-      <div class="flex-1 overflow-auto bg-[#e6e6e6] relative" id="excel-grid-scroll-container">
+      <div class="flex-1 overflow-auto bg-[#e6e6e6] relative" id="excel-grid-scroll-container"
+        onmouseup="ModuleBuilder.handleCellMouseUp()">
         <table class="excel-spreadsheet-table" onpaste="ModuleBuilder.handleSpreadsheetPaste(event)">
           <thead>
             <tr>
-              <th class="excel-corner-header"></th>
+              <th class="excel-corner-header" onclick="ModuleBuilder.selectAllCells()" title="點擊全選整張表格"></th>
               ${tpl.columns.map((c, idx) => {
                 const letter = this.getColumnLetter(idx);
                 const isSelectedCol = c.id === this.selectedColId;
@@ -253,6 +389,19 @@ window.ModuleBuilder = {
     `;
   },
 
+  getRangeCoordDisplay(tpl, colLetter, activeRowIdx) {
+    if (this.rangeStart && this.rangeEnd) {
+      const r1 = Math.min(this.rangeStart.rIdx, this.rangeEnd.rIdx);
+      const r2 = Math.max(this.rangeStart.rIdx, this.rangeEnd.rIdx);
+      const c1 = Math.min(this.rangeStart.cIdx, this.rangeEnd.cIdx);
+      const c2 = Math.max(this.rangeStart.cIdx, this.rangeEnd.cIdx);
+      if (r1 !== r2 || c1 !== c2) {
+        return `${this.getColumnLetter(c1)}${r1 + 1}:${this.getColumnLetter(c2)}${r2 + 1}`;
+      }
+    }
+    return activeRowIdx >= 0 ? `${colLetter}${activeRowIdx + 1}` : `${colLetter}1`;
+  },
+
   getColumnLetter(colIdx) {
     let letter = '';
     let temp = colIdx;
@@ -275,9 +424,6 @@ window.ModuleBuilder = {
     return map[type] || '文字';
   },
 
-  /**
-   * 於 Ribbon 工具列直接顯示當前格式之細部參數（如最低值、最高值、單位、下拉選項、加總公式）
-   */
   renderInlineParameterControls(col, row, cell, hasCellOverride, eff) {
     const isCellMode = Boolean(row && !row.isSection && cell && hasCellOverride);
     const onChangeFn = (prop, valExpr) => isCellMode
@@ -286,7 +432,7 @@ window.ModuleBuilder = {
 
     if (eff.type === 'number') {
       return `
-        <span class="text-slate-400">|</span>
+        <span class="text-slate-300">|</span>
         <span class="font-bold text-blue-700">最低：</span>
         <input type="number" step="any" value="${eff.min ?? ''}" placeholder="無"
           onchange="${onChangeFn('min', 'this.value===\'\'?undefined:parseFloat(this.value)')}"
@@ -305,7 +451,7 @@ window.ModuleBuilder = {
     if (eff.type === 'select') {
       const joined = (eff.options || ['合格', '待追蹤', '異常']).join(',');
       return `
-        <span class="text-slate-400">|</span>
+        <span class="text-slate-300">|</span>
         <span class="font-bold text-purple-700">選項(逗號分隔)：</span>
         <input type="text" value="${joined}"
           onchange="${onChangeFn('options', 'this.value.split(\',\').map(s=>s.trim()).filter(Boolean)')}"
@@ -315,7 +461,7 @@ window.ModuleBuilder = {
 
     if (eff.type === 'checkbox') {
       return `
-        <span class="text-slate-400">|</span>
+        <span class="text-slate-300">|</span>
         <span class="font-bold text-emerald-700">勾選文字：</span>
         <input type="text" value="${eff.checkLabel || '正常'}"
           onchange="${onChangeFn('checkLabel', 'this.value')}"
@@ -325,7 +471,7 @@ window.ModuleBuilder = {
 
     if (eff.type === 'sum') {
       return `
-        <span class="text-slate-400">|</span>
+        <span class="text-slate-300">|</span>
         <span class="font-bold text-amber-800">公式：</span>
         <select onchange="${onChangeFn('formula', 'this.value')}"
           class="border border-amber-300 rounded px-2 py-0.5 font-bold bg-white">
@@ -338,17 +484,29 @@ window.ModuleBuilder = {
     return '';
   },
 
+  isCellInSelectedRange(rIdx, cIdx) {
+    if (!this.rangeStart || !this.rangeEnd) return false;
+    const r1 = Math.min(this.rangeStart.rIdx, this.rangeEnd.rIdx);
+    const r2 = Math.max(this.rangeStart.rIdx, this.rangeEnd.rIdx);
+    const c1 = Math.min(this.rangeStart.cIdx, this.rangeEnd.cIdx);
+    const c2 = Math.max(this.rangeStart.cIdx, this.rangeEnd.cIdx);
+    return rIdx >= r1 && rIdx <= r2 && cIdx >= c1 && cIdx <= c2;
+  },
+
   renderExcelGridRows(tpl) {
+    const gridMap = App.computeMergedGridMap(tpl);
+
     return tpl.rows.map((r, rIdx) => {
       const isSelectedRow = r.id === this.selectedRowId;
+      const rowHeight = r.height || 36;
 
       if (r.isSection) {
         return `
-          <tr>
-            <td onclick="ModuleBuilder.selectRow('${r.id}')"
+          <tr style="height:${rowHeight}px">
+            <td onclick="ModuleBuilder.selectRow('${r.id}', ${rIdx})"
               class="excel-row-header ${isSelectedRow ? 'selected-row' : ''}">${rIdx + 1}</td>
             <td colspan="${tpl.columns.length}"
-              onclick="ModuleBuilder.selectRow('${r.id}')"
+              onclick="ModuleBuilder.selectRow('${r.id}', ${rIdx})"
               class="bg-slate-800 text-white px-2 py-1">
               <div class="flex items-center gap-2">
                 <span class="text-[10px] px-1.5 py-0.2 rounded bg-blue-600 font-bold shrink-0">分類標題列</span>
@@ -365,53 +523,59 @@ window.ModuleBuilder = {
 
       if (!r.cells) r.cells = {};
 
-      let skip = 0;
       const cellsHtml = tpl.columns.map((c, cIdx) => {
-        if (skip > 0) {
-          skip--;
-          return '';
-        }
+        const mapInfo = gridMap[rIdx]?.[cIdx];
+        if (mapInfo && mapInfo.skip) return '';
+
         if (!r.cells[c.id]) r.cells[c.id] = { value: '' };
         const cell = r.cells[c.id];
-        const colspan = Math.min(parseInt(cell.colspan, 10) || 1, tpl.columns.length - cIdx);
-        if (colspan > 1) skip = colspan - 1;
+        const colspan = mapInfo ? mapInfo.colspan : 1;
+        const rowspan = mapInfo ? mapInfo.rowspan : 1;
 
         const isSelCell = (this.selectedRowId === r.id && this.selectedColId === c.id);
+        const isInRange = this.isCellInSelectedRange(rIdx, cIdx);
         const eff = Object.assign({}, c, cell.override || {});
         const hasOverride = Boolean(cell.override && Object.keys(cell.override).length > 0);
+        const styleInfo = App.getEffectiveCellStyle(c, cell);
 
         let formatTag = '';
+        if (rowspan > 1 || colspan > 1) {
+          formatTag += `<span class="text-[9px] font-mono text-emerald-800 bg-emerald-100 px-1 rounded font-bold shrink-0" title="已合併儲存格">${rowspan > 1 ? `${rowspan}列` : ''}${colspan > 1 ? `${colspan}欄` : ''}</span>`;
+        }
         if (eff.type === 'number' && (eff.min !== undefined || eff.max !== undefined)) {
-          formatTag = `<span class="text-[9px] font-mono text-blue-600 bg-blue-50 px-1 rounded shrink-0">[${eff.min ?? '-∞'}~${eff.max ?? '∞'}${eff.unit || ''}]</span>`;
+          formatTag += `<span class="text-[9px] font-mono text-blue-600 bg-blue-50 px-1 rounded shrink-0">[${eff.min ?? '-∞'}~${eff.max ?? '∞'}${eff.unit || ''}]</span>`;
         } else if (eff.type === 'sum') {
-          formatTag = `<span class="text-[9px] font-mono text-amber-800 bg-amber-100 px-1 rounded font-bold shrink-0">∑${eff.formula || 'COL'}</span>`;
+          formatTag += `<span class="text-[9px] font-mono text-amber-800 bg-amber-100 px-1 rounded font-bold shrink-0">∑${eff.formula || 'COL'}</span>`;
         } else if (eff.type === 'checkbox') {
-          formatTag = `<span class="text-[9px] text-emerald-700 bg-emerald-50 px-1 rounded shrink-0">☑${eff.checkLabel || '正常'}</span>`;
+          formatTag += `<span class="text-[9px] text-emerald-700 bg-emerald-50 px-1 rounded shrink-0">☑${eff.checkLabel || '正常'}</span>`;
         } else if (eff.type === 'select') {
-          formatTag = `<span class="text-[9px] text-purple-700 bg-purple-50 px-1 rounded shrink-0">▼下拉</span>`;
+          formatTag += `<span class="text-[9px] text-purple-700 bg-purple-50 px-1 rounded shrink-0">▼下拉</span>`;
         } else if (eff.type === 'date') {
-          formatTag = `<span class="text-[9px] text-slate-500 bg-slate-100 px-1 rounded shrink-0">📅日期</span>`;
+          formatTag += `<span class="text-[9px] text-slate-500 bg-slate-100 px-1 rounded shrink-0">📅日期</span>`;
         }
 
         const displayVal = cell.value === true ? 'true' : (cell.value ?? '');
 
         return `
-          <td colspan="${colspan}"
-            onclick="ModuleBuilder.selectCell('${r.id}','${c.id}', false)"
-            class="excel-cell ${cell.readOnly ? 'readonly-cell' : ''} ${isSelCell ? 'active-excel-cell' : ''}">
+          <td colspan="${colspan}" rowspan="${rowspan}"
+            onmousedown="ModuleBuilder.handleCellMouseDown(event, '${r.id}', '${c.id}', ${rIdx}, ${cIdx})"
+            onmouseenter="ModuleBuilder.handleCellMouseEnter(${rIdx}, ${cIdx})"
+            style="${styleInfo.bgColor ? `background-color:${styleInfo.bgColor};` : ''}"
+            class="excel-cell ${cell.readOnly ? 'readonly-cell' : ''} ${isInRange ? 'in-range-selection' : ''} ${isSelCell ? 'active-excel-cell' : ''}">
             ${hasOverride ? '<div class="cell-override-dot" title="此儲存格已設定獨立格式"></div>' : ''}
-            <div class="flex items-center h-full pr-1">
+            <div class="flex items-center h-full pr-1 gap-0.5">
               <input type="text"
                 data-row-id="${r.id}"
                 data-col-id="${c.id}"
                 data-r-idx="${rIdx}"
                 data-c-idx="${cIdx}"
                 value="${String(displayVal).replace(/"/g, '&quot;')}"
-                onfocus="ModuleBuilder.onCellInputFocus('${r.id}','${c.id}')"
+                style="${styleInfo.cssText}"
+                onfocus="ModuleBuilder.onCellInputFocus('${r.id}','${c.id}', ${rIdx}, ${cIdx})"
                 oninput="ModuleBuilder.updateCellDefaultValueSilent('${r.id}','${c.id}',this.value)"
                 onchange="DB.save()"
                 onkeydown="ModuleBuilder.handleCellKeyDown(event, ${rIdx}, ${cIdx})"
-                class="excel-cell-input ${cell.readOnly ? 'text-slate-600 font-medium' : 'text-slate-900'}" />
+                class="excel-cell-input ${cell.readOnly ? 'text-slate-600' : 'text-slate-900'}" />
               ${formatTag}
             </div>
           </td>
@@ -419,8 +583,8 @@ window.ModuleBuilder = {
       }).join('');
 
       return `
-        <tr>
-          <td onclick="ModuleBuilder.selectRow('${r.id}')"
+        <tr style="height:${rowHeight}px">
+          <td onclick="ModuleBuilder.selectRow('${r.id}', ${rIdx})"
             class="excel-row-header ${isSelectedRow ? 'selected-row' : ''}">${rIdx + 1}</td>
           ${cellsHtml}
         </tr>
@@ -429,18 +593,209 @@ window.ModuleBuilder = {
   },
 
   /**
-   * 聚焦儲存格時更新座標與 fx 資料編輯列（避免整表重繪造成輸入中斷）
+   * 滑鼠按下與拖曳範圍選取（支援按住 Shift 點擊選取多列多欄，或滑鼠直接拖曳選取）
    */
-  onCellInputFocus(rowId, colId) {
-    if (this.selectedRowId === rowId && this.selectedColId === colId) return;
+  handleCellMouseDown(e, rowId, colId, rIdx, cIdx) {
+    this.selectionScope = 'cell';
+    if (e.shiftKey && this.rangeStart) {
+      this.rangeEnd = { rIdx, cIdx };
+      this.render();
+      return;
+    }
+    this.selectedRowId = rowId;
+    this.selectedColId = colId;
+    this.rangeStart = { rIdx, cIdx };
+    this.rangeEnd = { rIdx, cIdx };
+    this.isMouseDragging = true;
+  },
+
+  handleCellMouseEnter(rIdx, cIdx) {
+    if (!this.isMouseDragging || !this.rangeStart) return;
+    if (this.rangeEnd && this.rangeEnd.rIdx === rIdx && this.rangeEnd.cIdx === cIdx) return;
+    this.rangeEnd = { rIdx, cIdx };
+    this.highlightRangeDOMOnly();
+  },
+
+  handleCellMouseUp() {
+    if (!this.isMouseDragging) return;
+    this.isMouseDragging = false;
+    if (this.rangeStart && this.rangeEnd && (this.rangeStart.rIdx !== this.rangeEnd.rIdx || this.rangeStart.cIdx !== this.rangeEnd.cIdx)) {
+      this.render();
+    }
+  },
+
+  highlightRangeDOMOnly() {
+    document.querySelectorAll('.excel-cell').forEach(td => td.classList.remove('in-range-selection'));
+    if (!this.rangeStart || !this.rangeEnd) return;
+    const r1 = Math.min(this.rangeStart.rIdx, this.rangeEnd.rIdx);
+    const r2 = Math.max(this.rangeStart.rIdx, this.rangeEnd.rIdx);
+    const c1 = Math.min(this.rangeStart.cIdx, this.rangeEnd.cIdx);
+    const c2 = Math.max(this.rangeStart.cIdx, this.rangeEnd.cIdx);
+
+    for (let r = r1; r <= r2; r++) {
+      for (let c = c1; c <= c2; c++) {
+        const inp = document.querySelector(`input[data-r-idx="${r}"][data-c-idx="${c}"]`);
+        if (inp && inp.closest('.excel-cell')) {
+          inp.closest('.excel-cell').classList.add('in-range-selection');
+        }
+      }
+    }
+    const nameBox = document.getElementById('excel-name-box');
+    if (nameBox) {
+      nameBox.textContent = `${this.getColumnLetter(c1)}${r1 + 1}:${this.getColumnLetter(c2)}${r2 + 1}`;
+    }
+  },
+
+  /**
+   * 一鍵將選取範圍進行「上下與左右合併儲存格」
+   */
+  mergeSelectedRange() {
+    const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
+    if (!tpl || !this.rangeStart || !this.rangeEnd) {
+      App.toast('請先用滑鼠拖曳（或按住 Shift 點擊）選取要合併的儲存格範圍！', 'info');
+      return;
+    }
+
+    const r1 = Math.min(this.rangeStart.rIdx, this.rangeEnd.rIdx);
+    const r2 = Math.max(this.rangeStart.rIdx, this.rangeEnd.rIdx);
+    const c1 = Math.min(this.rangeStart.cIdx, this.rangeEnd.cIdx);
+    const c2 = Math.max(this.rangeStart.cIdx, this.rangeEnd.cIdx);
+
+    if (r1 === r2 && c1 === c2) {
+      App.toast('請用滑鼠拖曳選取至少 2 個相鄰的上下或左右儲存格，或直接於工具列輸入合併列數/欄數', 'info');
+      return;
+    }
+
+    for (let r = r1; r <= r2; r++) {
+      if (tpl.rows[r]?.isSection) {
+        App.toast('分類標題列無法與一般儲存格進行上下合併！', 'error');
+        return;
+      }
+    }
+
+    this.pushUndoState(tpl);
+
+    const masterRow = tpl.rows[r1];
+    const masterCol = tpl.columns[c1];
+    if (!masterRow.cells[masterCol.id]) masterRow.cells[masterCol.id] = { value: '' };
+
+    // 清除被合併子儲存格原有的跨列跨欄設定
+    for (let r = r1; r <= r2; r++) {
+      for (let c = c1; c <= c2; c++) {
+        const colId = tpl.columns[c].id;
+        if (!tpl.rows[r].cells[colId]) tpl.rows[r].cells[colId] = { value: '' };
+        tpl.rows[r].cells[colId].rowspan = 1;
+        tpl.rows[r].cells[colId].colspan = 1;
+      }
+    }
+
+    masterRow.cells[masterCol.id].rowspan = r2 - r1 + 1;
+    masterRow.cells[masterCol.id].colspan = c2 - c1 + 1;
+
+    this.selectedRowId = masterRow.id;
+    this.selectedColId = masterCol.id;
+    this.rangeStart = { rIdx: r1, cIdx: c1 };
+    this.rangeEnd = { rIdx: r1, cIdx: c1 };
+
+    DB.save();
+    this.render();
+    App.toast(`已合併儲存格 (${r2 - r1 + 1} 列 × ${c2 - c1 + 1} 欄)！`, 'success');
+  },
+
+  /**
+   * 取消合併儲存格
+   */
+  unmergeSelectedRange() {
+    const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
+    if (!tpl) return;
+    this.pushUndoState(tpl);
+
+    const r1 = this.rangeStart ? Math.min(this.rangeStart.rIdx, this.rangeEnd?.rIdx ?? this.rangeStart.rIdx) : tpl.rows.findIndex(r => r.id === this.selectedRowId);
+    const r2 = this.rangeStart ? Math.max(this.rangeStart.rIdx, this.rangeEnd?.rIdx ?? this.rangeStart.rIdx) : r1;
+    const c1 = this.rangeStart ? Math.min(this.rangeStart.cIdx, this.rangeEnd?.cIdx ?? this.rangeStart.cIdx) : tpl.columns.findIndex(c => c.id === this.selectedColId);
+    const c2 = this.rangeStart ? Math.max(this.rangeStart.cIdx, this.rangeEnd?.cIdx ?? this.rangeStart.cIdx) : c1;
+
+    for (let r = Math.max(0, r1); r <= Math.min(tpl.rows.length - 1, r2); r++) {
+      const row = tpl.rows[r];
+      if (!row || row.isSection) continue;
+      for (let c = Math.max(0, c1); c <= Math.min(tpl.columns.length - 1, c2); c++) {
+        const colId = tpl.columns[c].id;
+        if (row.cells && row.cells[colId]) {
+          row.cells[colId].rowspan = 1;
+          row.cells[colId].colspan = 1;
+        }
+      }
+    }
+
+    DB.save();
+    this.render();
+    App.toast('已取消合併儲存格！', 'info');
+  },
+
+  /**
+   * 將樣式（靠左/置中/靠右對齊、字型大小、粗體、斜體、底色、文字色）套用至目前選取範圍、整欄或整列
+   */
+  applyStyleToSelection(prop, value) {
+    const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
+    if (!tpl) return;
+    this.pushUndoState(tpl);
+
+    // 若使用者剛點擊了「欄位標題 (A, B, C...)」，套用至整欄
+    if (this.selectionScope === 'col' && this.selectedColId) {
+      const col = tpl.columns.find(c => c.id === this.selectedColId);
+      if (col) col[prop] = value;
+      tpl.rows.forEach(r => {
+        if (!r.isSection && r.cells && r.cells[this.selectedColId]) {
+          r.cells[this.selectedColId][prop] = value;
+        }
+      });
+      DB.save();
+      this.render();
+      return;
+    }
+
+    // 套用至選取範圍內的所有儲存格
+    const r1 = this.rangeStart ? Math.min(this.rangeStart.rIdx, this.rangeEnd?.rIdx ?? this.rangeStart.rIdx) : tpl.rows.findIndex(r => r.id === this.selectedRowId);
+    const r2 = this.rangeStart ? Math.max(this.rangeStart.rIdx, this.rangeEnd?.rIdx ?? this.rangeStart.rIdx) : r1;
+    const c1 = this.rangeStart ? Math.min(this.rangeStart.cIdx, this.rangeEnd?.cIdx ?? this.rangeStart.cIdx) : tpl.columns.findIndex(c => c.id === this.selectedColId);
+    const c2 = this.rangeStart ? Math.max(this.rangeStart.cIdx, this.rangeEnd?.cIdx ?? this.rangeStart.cIdx) : c1;
+
+    for (let r = Math.max(0, r1); r <= Math.min(tpl.rows.length - 1, r2); r++) {
+      const row = tpl.rows[r];
+      if (!row || row.isSection) continue;
+      for (let c = Math.max(0, c1); c <= Math.min(tpl.columns.length - 1, c2); c++) {
+        const colId = tpl.columns[c].id;
+        if (!row.cells[colId]) row.cells[colId] = { value: '' };
+        row.cells[colId][prop] = value;
+      }
+    }
+
+    DB.save();
+    this.render();
+  },
+
+  clearSelectionColors() {
+    this.applyStyleToSelection('bgColor', '');
+    this.applyStyleToSelection('textColor', '');
+  },
+
+  selectAllCells() {
+    const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
+    if (!tpl || tpl.rows.length === 0 || tpl.columns.length === 0) return;
+    this.selectionScope = 'cell';
+    this.rangeStart = { rIdx: 0, cIdx: 0 };
+    this.rangeEnd = { rIdx: tpl.rows.length - 1, cIdx: tpl.columns.length - 1 };
+    this.render();
+  },
+
+  onCellInputFocus(rowId, colId, rIdx, cIdx) {
+    this.selectionScope = 'cell';
     this.selectedRowId = rowId;
     this.selectedColId = colId;
 
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
 
-    const cIdx = tpl.columns.findIndex(c => c.id === colId);
-    const rIdx = tpl.rows.findIndex(r => r.id === rowId);
     const nameBox = document.getElementById('excel-name-box');
     if (nameBox && cIdx >= 0 && rIdx >= 0) {
       nameBox.textContent = `${this.getColumnLetter(cIdx)}${rIdx + 1}`;
@@ -504,20 +859,21 @@ window.ModuleBuilder = {
     DB.saveLocal();
   },
 
-  /**
-   * 支援在試算表內使用方向鍵 / Enter / Tab 快速移動焦點
-   */
   handleCellKeyDown(e, rIdx, cIdx) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      this.undo();
+      return;
+    }
+
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
 
     let targetR = rIdx;
     let targetC = cIdx;
 
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      targetR = Math.min(tpl.rows.length - 1, rIdx + 1);
-    } else if (e.key === 'ArrowDown') {
+    if (e.key === 'Enter' || e.key === 'ArrowDown') {
+      if (e.key === 'Enter') e.preventDefault();
       targetR = Math.min(tpl.rows.length - 1, rIdx + 1);
     } else if (e.key === 'ArrowUp') {
       targetR = Math.max(0, rIdx - 1);
@@ -525,16 +881,18 @@ window.ModuleBuilder = {
       return;
     }
 
-    const nextInput = document.querySelector(`input[data-r-idx="${targetR}"][data-c-idx="${targetC}"]`);
-    if (nextInput) {
-      nextInput.focus();
-      nextInput.select();
+    for (let step = targetR; step >= 0 && step < tpl.rows.length; step += (targetR > rIdx ? 1 : -1)) {
+      const nextInput = document.querySelector(`input[data-r-idx="${step}"][data-c-idx="${targetC}"]`);
+      if (nextInput) {
+        nextInput.focus();
+        nextInput.select();
+        this.rangeStart = { rIdx: step, cIdx: targetC };
+        this.rangeEnd = { rIdx: step, cIdx: targetC };
+        break;
+      }
     }
   },
 
-  /**
-   * 支援直接從桌面 Excel 複製多格區域並於試算表內按 Ctrl+V 貼上
-   */
   handleSpreadsheetPaste(e) {
     const clipText = (e.clipboardData || window.clipboardData)?.getData('text');
     if (!clipText || (!clipText.includes('\t') && !clipText.includes('\n'))) return;
@@ -542,6 +900,7 @@ window.ModuleBuilder = {
     e.preventDefault();
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
+    this.pushUndoState(tpl);
 
     const rowsData = clipText.replace(/\r/g, '').split('\n').filter(line => line.length > 0).map(line => line.split('\t'));
     if (rowsData.length === 0) return;
@@ -549,7 +908,6 @@ window.ModuleBuilder = {
     let startR = Math.max(0, tpl.rows.findIndex(r => r.id === this.selectedRowId));
     let startC = Math.max(0, tpl.columns.findIndex(c => c.id === this.selectedColId));
 
-    // 若貼上欄位數超出目前欄數，自動擴充欄位
     const maxColsNeeded = startC + Math.max(...rowsData.map(r => r.length));
     while (tpl.columns.length < maxColsNeeded) {
       const newColId = 'c_' + Date.now() + '_' + tpl.columns.length;
@@ -580,9 +938,6 @@ window.ModuleBuilder = {
     App.toast(`已從剪貼簿貼上 ${rowsData.length} 列 Excel 資料！`, 'success');
   },
 
-  /**
-   * 觸發匯入 Excel 檔案選擇器
-   */
   triggerExcelImport() {
     const fileEl = document.getElementById('excel-file-input');
     if (fileEl) {
@@ -591,9 +946,6 @@ window.ModuleBuilder = {
     }
   },
 
-  /**
-   * 解析使用者上傳的 Excel (.xlsx / .xls / .csv) 並自動推導定檢表結構
-   */
   handleExcelFileSelect(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -626,14 +978,14 @@ window.ModuleBuilder = {
   },
 
   /**
-   * 智慧轉換 Excel 二維陣列與合併資訊為系統表單 Columns 與 Rows（含自動偵測上下限與勾選）
+   * 智慧轉換 Excel 二維陣列與合併資訊（同時支援 Excel 垂直合併 rowspan 與水平合併 colspan）
    */
   convertExcelSheetToTemplateStructure(fileName, sheetName, rawGrid, merges) {
-    // 過濾全空白列
     const nonEmptyRows = [];
     rawGrid.forEach((rowArr, originalRowIdx) => {
       const hasContent = rowArr.some(cell => String(cell ?? '').trim() !== '');
-      if (hasContent) {
+      const isPartOfMerge = merges.some(m => originalRowIdx >= m.s.r && originalRowIdx <= m.e.r);
+      if (hasContent || isPartOfMerge) {
         nonEmptyRows.push({ rowArr, originalRowIdx });
       }
     });
@@ -653,7 +1005,6 @@ window.ModuleBuilder = {
       };
     }
 
-    // 找出最適合作為欄位表頭的列（第一個擁有 >=2 個非空儲存格的列）
     let headerIdxInNonEmpty = 0;
     for (let i = 0; i < Math.min(5, nonEmptyRows.length); i++) {
       const nonBlankCount = nonEmptyRows[i].rowArr.filter(v => String(v ?? '').trim() !== '').length;
@@ -664,7 +1015,6 @@ window.ModuleBuilder = {
     }
 
     const headerRow = nonEmptyRows[headerIdxInNonEmpty].rowArr;
-    // 計算有效欄數
     let maxColCount = headerRow.length;
     nonEmptyRows.forEach(item => {
       for (let c = item.rowArr.length - 1; c >= 0; c--) {
@@ -676,7 +1026,6 @@ window.ModuleBuilder = {
     });
     maxColCount = Math.max(2, Math.min(maxColCount, 15));
 
-    // 建立欄位定義並依據標題文字智慧判斷欄位格式
     const columns = [];
     for (let c = 0; c < maxColCount; c++) {
       const rawTitle = String(headerRow[c] ?? '').trim() || `欄位 ${this.getColumnLetter(c)}`;
@@ -717,45 +1066,49 @@ window.ModuleBuilder = {
       }, extraProps));
     }
 
-    // 建立資料列
     const rows = [];
-    for (let i = headerIdxInNonEmpty + 1; i < nonEmptyRows.length; i++) {
-      const { rowArr, originalRowIdx } = nonEmptyRows[i];
-      const nonBlankCells = rowArr.slice(0, maxColCount).filter(v => String(v ?? '').trim() !== '');
+    const origRowToRenderedRowIdx = {};
+    const bodyItems = nonEmptyRows.slice(headerIdxInNonEmpty + 1);
+    bodyItems.forEach((item, idx) => {
+      origRowToRenderedRowIdx[item.originalRowIdx] = idx;
+    });
 
-      // 檢查此列在 Excel 中是否為整列跨欄合併，或僅第一格有文字（代表大分類標題列）
-      const rowMerge = merges.find(m => m.s.r === originalRowIdx && m.e.r === originalRowIdx && (m.e.c - m.s.c + 1) >= Math.max(2, maxColCount - 1));
-      if (rowMerge || (nonBlankCells.length === 1 && String(rowArr[0] ?? '').trim().length >= 4 && isNaN(Number(rowArr[0])))) {
+    bodyItems.forEach(({ rowArr, originalRowIdx }, idx) => {
+      const nonBlankCells = rowArr.slice(0, maxColCount).filter(v => String(v ?? '').trim() !== '');
+      const fullRowMerge = merges.find(m => m.s.r === originalRowIdx && m.e.r === originalRowIdx && (m.e.c - m.s.c + 1) >= Math.max(2, maxColCount - 1));
+
+      if (fullRowMerge && nonBlankCells.length <= 1) {
         rows.push({
-          id: `sec_${i}`,
+          id: `sec_${idx}`,
           isSection: true,
           sectionTitle: String(nonBlankCells[0] || rowArr[0]).trim(),
           cells: {}
         });
-        continue;
+        return;
       }
 
       const cellsObj = {};
-      let rowTextForRangeDetection = rowArr.map(v => String(v ?? '')).join(' ');
+      const rowTextForRangeDetection = rowArr.map(v => String(v ?? '')).join(' ');
       const rangeMatch = rowTextForRangeDetection.match(/(-?\d+(?:\.\d+)?)\s*[~～\-至]\s*(-?\d+(?:\.\d+)?)\s*([A-Za-z°℃%ΩVvAaWwHz]+)?/);
 
       columns.forEach((col, cIdx) => {
-        let rawVal = rowArr[cIdx];
-        let strVal = String(rawVal ?? '').trim();
-        const cellData = { value: strVal };
+        const rawVal = rowArr[cIdx];
+        const strVal = String(rawVal ?? '').trim();
+        const cellData = { value: strVal, align: col.align || 'center', fontSize: 12 };
 
-        // 檢查水平跨欄合併
-        const cellMerge = merges.find(m => m.s.r === originalRowIdx && m.s.c === cIdx && m.e.c > cIdx);
+        // 檢查 Excel 中以本儲存格為起點的上下或左右合併 (!merges)
+        const cellMerge = merges.find(m => m.s.r === originalRowIdx && m.s.c === cIdx);
         if (cellMerge) {
-          cellData.colspan = cellMerge.e.c - cellMerge.s.c + 1;
+          const spanCols = cellMerge.e.c - cellMerge.s.c + 1;
+          const spanRows = cellMerge.e.r - cellMerge.s.r + 1;
+          if (spanCols > 1) cellData.colspan = spanCols;
+          if (spanRows > 1) cellData.rowspan = spanRows;
         }
 
-        // 前兩欄（如項次、檢查項目名稱）若已有固定文字，預設設為唯讀方便填表
         if (cIdx <= 1 && strVal !== '') {
           cellData.readOnly = true;
         }
 
-        // 若本列文字含有上下限範圍（例如 210~230V），自動套用至數值欄位的單格上下限設定
         if (col.type === 'number' && rangeMatch) {
           cellData.override = {
             type: 'number',
@@ -765,7 +1118,6 @@ window.ModuleBuilder = {
           };
         }
 
-        // 若儲存格內容為 V / ✓ / 正常，自動識別為勾選
         if (strVal === '✓' || strVal === '☑' || strVal.toUpperCase() === 'TRUE') {
           cellData.value = true;
           if (col.type !== 'checkbox') {
@@ -777,11 +1129,11 @@ window.ModuleBuilder = {
       });
 
       rows.push({
-        id: `r_${i}`,
+        id: `r_${idx}`,
         isSection: false,
         cells: cellsObj
       });
-    }
+    });
 
     return {
       suggestedName: cleanFileTitle,
@@ -809,7 +1161,7 @@ window.ModuleBuilder = {
 
           <div class="p-5 space-y-4 text-xs">
             <div class="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 space-y-1">
-              <div class="font-bold">✓ 已自動偵測試算表結構：</div>
+              <div class="font-bold">✓ 已自動偵測試算表結構（含上下與左右合併儲存格）：</div>
               <div>・工作表名稱：<strong>${p.sheetName}</strong></div>
               <div>・偵測欄位數：<strong>${p.columns.length} 欄</strong>（${p.columns.map(c => c.title).join('、')}）</div>
               <div>・偵測點檢列數：<strong>${p.rows.length} 列</strong></div>
@@ -900,28 +1252,41 @@ window.ModuleBuilder = {
     this.pendingImportData = null;
     this.selectedColId = null;
     this.selectedRowId = null;
+    this.rangeStart = null;
+    this.rangeEnd = null;
     DB.save();
     this.render();
     App.toast(`已由 Excel 自動生成「${name} (${cycle})」！`, 'success');
   },
 
   /**
-   * 將目前設計中的表單匯出為標準 Excel (.xlsx) 檔案
+   * 匯出為 Excel (.xlsx) 檔案（同時保留上下與左右合併設定 `!merges`）
    */
   exportCurrentToExcel() {
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl || typeof XLSX === 'undefined') return;
 
     const aoa = [];
-    // 第 1 列：欄位標題
+    const merges = [];
     aoa.push(tpl.columns.map(c => c.title));
 
-    // 資料列
-    tpl.rows.forEach(r => {
+    const gridMap = App.computeMergedGridMap(tpl);
+    tpl.rows.forEach((r, rIdx) => {
+      const sheetRowIdx = rIdx + 1;
       if (r.isSection) {
         aoa.push([r.sectionTitle || '']);
+        if (tpl.columns.length > 1) {
+          merges.push({ s: { r: sheetRowIdx, c: 0 }, e: { r: sheetRowIdx, c: tpl.columns.length - 1 } });
+        }
       } else {
-        aoa.push(tpl.columns.map(c => {
+        aoa.push(tpl.columns.map((c, cIdx) => {
+          const mapInfo = gridMap[rIdx]?.[cIdx];
+          if (mapInfo && !mapInfo.skip && (mapInfo.rowspan > 1 || mapInfo.colspan > 1)) {
+            merges.push({
+              s: { r: sheetRowIdx, c: cIdx },
+              e: { r: sheetRowIdx + mapInfo.rowspan - 1, c: cIdx + mapInfo.colspan - 1 }
+            });
+          }
           const val = r.cells?.[c.id]?.value;
           return val === true ? '✓' : (val ?? '');
         }));
@@ -929,6 +1294,7 @@ window.ModuleBuilder = {
     });
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!merges'] = merges;
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '定檢表範本');
     XLSX.writeFile(wb, `${tpl.name}.xlsx`);
@@ -938,23 +1304,44 @@ window.ModuleBuilder = {
     App.activeTemplateId = tplId;
     this.selectedColId = null;
     this.selectedRowId = null;
+    this.rangeStart = null;
+    this.rangeEnd = null;
+    this.undoStack = [];
     this.render();
   },
 
   selectColumn(colId) {
+    const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
+    this.selectionScope = 'col';
     this.selectedColId = colId;
+    if (tpl) {
+      const cIdx = tpl.columns.findIndex(c => c.id === colId);
+      if (cIdx >= 0 && tpl.rows.length > 0) {
+        this.rangeStart = { rIdx: 0, cIdx };
+        this.rangeEnd = { rIdx: tpl.rows.length - 1, cIdx };
+      }
+    }
     this.render();
   },
 
-  selectRow(rowId) {
+  selectRow(rowId, rIdx) {
+    const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
+    this.selectionScope = 'row';
     this.selectedRowId = rowId;
+    if (tpl && rIdx !== undefined && tpl.columns.length > 0) {
+      this.rangeStart = { rIdx, cIdx: 0 };
+      this.rangeEnd = { rIdx, cIdx: tpl.columns.length - 1 };
+    }
     this.render();
   },
 
-  selectCell(rowId, colId, shouldReRender = true) {
-    this.selectedRowId = rowId;
-    this.selectedColId = colId;
-    if (shouldReRender) this.render();
+  updateRowHeight(rowId, heightVal) {
+    const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
+    if (!tpl) return;
+    const row = tpl.rows.find(r => r.id === rowId);
+    if (row) row.height = Math.max(24, Math.min(300, heightVal));
+    DB.save();
+    this.render();
   },
 
   updateMeta(key, val) {
@@ -976,6 +1363,7 @@ window.ModuleBuilder = {
   updateColumnProp(colId, prop, val) {
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
+    this.pushUndoState(tpl);
     const col = tpl.columns.find(c => c.id === colId);
     if (!col) return;
     col[prop] = val;
@@ -986,6 +1374,7 @@ window.ModuleBuilder = {
   updateCellProp(rowId, colId, prop, val) {
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
+    this.pushUndoState(tpl);
     const row = tpl.rows.find(r => r.id === rowId);
     if (!row) return;
     if (!row.cells[colId]) row.cells[colId] = {};
@@ -997,6 +1386,7 @@ window.ModuleBuilder = {
   setCellOverrideType(rowId, colId, newType) {
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
+    this.pushUndoState(tpl);
     const row = tpl.rows.find(r => r.id === rowId);
     if (!row) return;
     if (!row.cells[colId]) row.cells[colId] = {};
@@ -1024,20 +1414,42 @@ window.ModuleBuilder = {
   addRow() {
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
+    this.pushUndoState(tpl);
     const cells = {};
     tpl.columns.forEach((c, idx) => {
-      cells[c.id] = { value: idx === 0 ? String(tpl.rows.filter(r => !r.isSection).length + 1) : '' };
+      cells[c.id] = { value: idx === 0 ? String(tpl.rows.filter(r => !r.isSection).length + 1) : '', align: c.align || 'center', fontSize: 12 };
     });
     const newRow = { id: 'r_' + Date.now(), isSection: false, cells };
-    tpl.rows.push(newRow);
+    const currIdx = tpl.rows.findIndex(r => r.id === this.selectedRowId);
+    if (currIdx >= 0) {
+      tpl.rows.splice(currIdx + 1, 0, newRow);
+    } else {
+      tpl.rows.push(newRow);
+    }
     this.selectedRowId = newRow.id;
     DB.save();
     this.render();
   },
 
+  duplicateRow(rowId) {
+    const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
+    if (!tpl) return;
+    const idx = tpl.rows.findIndex(r => r.id === rowId);
+    if (idx < 0) return;
+    this.pushUndoState(tpl);
+    const copy = JSON.parse(JSON.stringify(tpl.rows[idx]));
+    copy.id = 'r_' + Date.now();
+    tpl.rows.splice(idx + 1, 0, copy);
+    this.selectedRowId = copy.id;
+    DB.save();
+    this.render();
+    App.toast('已複製選取列！', 'success');
+  },
+
   addSectionRow() {
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
+    this.pushUndoState(tpl);
     const newSec = { id: 'sec_' + Date.now(), isSection: true, sectionTitle: '新增分類區段標題', cells: {} };
     tpl.rows.push(newSec);
     this.selectedRowId = newSec.id;
@@ -1048,8 +1460,11 @@ window.ModuleBuilder = {
   deleteRow(rowId) {
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
+    this.pushUndoState(tpl);
     tpl.rows = tpl.rows.filter(r => r.id !== rowId);
     this.selectedRowId = tpl.rows[0]?.id || null;
+    this.rangeStart = null;
+    this.rangeEnd = null;
     DB.save();
     this.render();
   },
@@ -1057,12 +1472,13 @@ window.ModuleBuilder = {
   addColumn() {
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl) return;
+    this.pushUndoState(tpl);
     const newColId = 'c_' + Date.now();
-    tpl.columns.push({ id: newColId, title: '新欄位', width: 120, type: 'text', align: 'center' });
+    tpl.columns.push({ id: newColId, title: '新欄位', width: 120, type: 'text', align: 'center', fontSize: 12 });
     tpl.rows.forEach(r => {
       if (!r.isSection) {
         if (!r.cells) r.cells = {};
-        r.cells[newColId] = { value: '' };
+        r.cells[newColId] = { value: '', align: 'center', fontSize: 12 };
       }
     });
     this.selectedColId = newColId;
@@ -1073,11 +1489,14 @@ window.ModuleBuilder = {
   deleteColumn(colId) {
     const tpl = DB.state.templates.find(t => t.id === App.activeTemplateId);
     if (!tpl || tpl.columns.length <= 1) return;
+    this.pushUndoState(tpl);
     tpl.columns = tpl.columns.filter(c => c.id !== colId);
     tpl.rows.forEach(r => {
       if (r.cells) delete r.cells[colId];
     });
     this.selectedColId = tpl.columns[0]?.id || null;
+    this.rangeStart = null;
+    this.rangeEnd = null;
     DB.save();
     this.render();
   },
@@ -1095,22 +1514,22 @@ window.ModuleBuilder = {
       updatedAt: new Date().toISOString().slice(0, 10),
       createdBy: u.id,
       columns: [
-        { id: 'c1', title: '項次', width: 60, type: 'text', align: 'center' },
-        { id: 'c2', title: '點檢項目', width: 220, type: 'text', align: 'left' },
-        { id: 'c3', title: '量測數值', width: 130, type: 'number', min: 0, max: 100, unit: '', align: 'center' },
-        { id: 'c4', title: '正常勾選', width: 100, type: 'checkbox', checkLabel: '正常', align: 'center' },
-        { id: 'c5', title: '判定結果', width: 120, type: 'select', options: ['合格', '異常'], align: 'center' }
+        { id: 'c1', title: '項次', width: 60, type: 'text', align: 'center', fontSize: 12 },
+        { id: 'c2', title: '點檢項目', width: 220, type: 'text', align: 'left', fontSize: 12 },
+        { id: 'c3', title: '量測數值', width: 130, type: 'number', min: 0, max: 100, unit: '', align: 'center', fontSize: 12 },
+        { id: 'c4', title: '正常勾選', width: 100, type: 'checkbox', checkLabel: '正常', align: 'center', fontSize: 12 },
+        { id: 'c5', title: '判定結果', width: 120, type: 'select', options: ['合格', '異常'], align: 'center', fontSize: 12 }
       ],
       rows: [
         {
           id: 'r1',
           isSection: false,
           cells: {
-            c1: { value: '1', readOnly: true },
-            c2: { value: '範例點檢項目 (請直接點擊儲存格修改)', readOnly: false },
-            c3: { value: '50' },
-            c4: { value: true },
-            c5: { value: '合格' }
+            c1: { value: '1', readOnly: true, align: 'center', fontSize: 12 },
+            c2: { value: '範例點檢項目 (請直接點擊儲存格修改)', readOnly: false, align: 'left', fontSize: 12 },
+            c3: { value: '50', align: 'center', fontSize: 12 },
+            c4: { value: true, align: 'center', fontSize: 12 },
+            c5: { value: '合格', align: 'center', fontSize: 12 }
           }
         }
       ]
@@ -1118,6 +1537,7 @@ window.ModuleBuilder = {
 
     DB.state.templates.unshift(newTpl);
     App.activeTemplateId = newTpl.id;
+    this.undoStack = [];
     DB.save();
     this.render();
     App.toast('已建立新定檢表範本！', 'success');
@@ -1125,6 +1545,6 @@ window.ModuleBuilder = {
 
   saveTemplateNow() {
     DB.save();
-    App.toast('表單格式、填寫週期與標籤設定已儲存同步！', 'success');
+    App.toast('表單格式、合併設定、對齊與字型大小已儲存同步！', 'success');
   }
 };

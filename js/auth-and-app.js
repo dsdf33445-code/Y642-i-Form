@@ -1,5 +1,5 @@
 /**
- * Y642 每月定檢表系統 - 登入驗證、角色模組權限控管、標籤色彩、電子職章與 PDF 匯出核心
+ * Y642 每月定檢表系統 - 登入驗證、角色模組權限控管、二維合併儲存格引擎、電子職章與 PDF 匯出核心
  */
 window.App = {
   currentUser: null,        // 當前登入之帳號物件
@@ -359,6 +359,86 @@ window.App = {
   },
 
   /**
+   * 二維合併儲存格計算引擎（同時支援上下跨列合併 rowspan 與左右跨欄合併 colspan）
+   * 回傳結構：gridMap[rIdx][cIdx] = { skip: Boolean, rowspan: Number, colspan: Number, masterR: Number, masterC: Number }
+   */
+  computeMergedGridMap(tpl) {
+    const rowCount = (tpl.rows || []).length;
+    const colCount = (tpl.columns || []).length;
+    const gridMap = Array.from({ length: rowCount }, () =>
+      Array.from({ length: colCount }, () => ({ skip: false, rowspan: 1, colspan: 1 }))
+    );
+
+    for (let rIdx = 0; rIdx < rowCount; rIdx++) {
+      const row = tpl.rows[rIdx];
+      if (!row || row.isSection) continue;
+
+      for (let cIdx = 0; cIdx < colCount; cIdx++) {
+        if (gridMap[rIdx][cIdx].skip) continue;
+
+        const col = tpl.columns[cIdx];
+        const cell = (row.cells && row.cells[col.id]) || {};
+
+        let colspan = Math.max(1, Math.min(parseInt(cell.colspan, 10) || 1, colCount - cIdx));
+        // 避免跨欄覆蓋到已經被上方跨列佔用的格子
+        for (let dc = 1; dc < colspan; dc++) {
+          if (gridMap[rIdx][cIdx + dc].skip) {
+            colspan = dc;
+            break;
+          }
+        }
+
+        // 計算最大可用跨列數（遇到大分類列 isSection 或表格底端即停止）
+        let maxAvailRows = 1;
+        for (let dr = 1; rIdx + dr < rowCount; dr++) {
+          if (tpl.rows[rIdx + dr].isSection) break;
+          maxAvailRows++;
+        }
+        const rowspan = Math.max(1, Math.min(parseInt(cell.rowspan, 10) || 1, maxAvailRows));
+
+        gridMap[rIdx][cIdx] = { skip: false, rowspan, colspan, masterR: rIdx, masterC: cIdx };
+
+        for (let dr = 0; dr < rowspan; dr++) {
+          for (let dc = 0; dc < colspan; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            gridMap[rIdx + dr][cIdx + dc] = {
+              skip: true,
+              rowspan: 1,
+              colspan: 1,
+              masterR: rIdx,
+              masterC: cIdx
+            };
+          }
+        }
+      }
+    }
+    return gridMap;
+  },
+
+  /**
+   * 取得單一儲存格的最終顯示樣式（整合整欄設定與單格設定：靠左/置中/靠右、字型大小、粗體、斜體、背景色、文字色）
+   */
+  getEffectiveCellStyle(colObj, cellObj) {
+    const eff = Object.assign({}, colObj, (cellObj && cellObj.override) || {});
+    const align = (cellObj && cellObj.align) || eff.align || colObj.align || 'center';
+    const fontSize = (cellObj && cellObj.fontSize) || eff.fontSize || colObj.fontSize || 12;
+    const bold = Boolean((cellObj && cellObj.bold !== undefined) ? cellObj.bold : (eff.bold || colObj.bold));
+    const italic = Boolean((cellObj && cellObj.italic !== undefined) ? cellObj.italic : (eff.italic || colObj.italic));
+    const bgColor = (cellObj && cellObj.bgColor) || eff.bgColor || colObj.bgColor || '';
+    const textColor = (cellObj && cellObj.textColor) || eff.textColor || colObj.textColor || '';
+
+    return {
+      align,
+      fontSize,
+      bold,
+      italic,
+      bgColor,
+      textColor,
+      cssText: `text-align:${align}; font-size:${fontSize}px; font-weight:${bold ? '700' : '400'}; font-style:${italic ? 'italic' : 'normal'}; ${bgColor ? `background-color:${bgColor};` : ''} ${textColor ? `color:${textColor};` : ''}`
+    };
+  },
+
+  /**
    * 計算加總欄位 (SUM) 數值
    */
   computeSumCellValue(template, rowObj, colObj, cellValues) {
@@ -399,6 +479,12 @@ window.App = {
     document.getElementById('pdf-modal').classList.add('hidden');
   },
 
+  /**
+   * 渲染 A4 預覽與匯出內容：
+   * 1. 不顯示「Y642 電力維護課｜分類標籤｜週期」
+   * 2. 完整支援上下合併 (rowspan)、左右合併 (colspan)、靠左/置中/靠右對齊、字型大小
+   * 3. 簽核格自動移至 A4 最下方，並維持標準 A4 大小
+   */
   refreshPdfModal() {
     const rec = DB.state.records.find(r => r.id === this.pdfTargetRecordId);
     if (!rec) return;
@@ -425,11 +511,14 @@ window.App = {
       `;
     };
 
+    const gridMap = this.computeMergedGridMap(tpl);
     let rowsHtml = '';
-    tpl.rows.forEach(r => {
+
+    tpl.rows.forEach((r, rIdx) => {
+      const rowHeightStyle = r.height ? `style="height:${r.height}px"` : '';
       if (r.isSection) {
         rowsHtml += `
-          <tr>
+          <tr ${rowHeightStyle}>
             <td colspan="${tpl.columns.length}" class="bg-slate-200 font-bold text-left px-2 py-1.5 text-xs">
               ${r.sectionTitle}
             </td>
@@ -438,18 +527,17 @@ window.App = {
         return;
       }
 
-      rowsHtml += '<tr>';
-      let skipCount = 0;
-      tpl.columns.forEach((c) => {
-        if (skipCount > 0) {
-          skipCount--;
-          return;
-        }
-        const cellDef = (r.cells && r.cells[c.id]) || {};
-        const colspan = parseInt(cellDef.colspan, 10) || 1;
-        if (colspan > 1) skipCount = colspan - 1;
+      rowsHtml += `<tr ${rowHeightStyle}>`;
+      tpl.columns.forEach((c, cIdx) => {
+        const mapInfo = gridMap[rIdx]?.[cIdx];
+        if (mapInfo && mapInfo.skip) return;
 
+        const colspan = mapInfo ? mapInfo.colspan : 1;
+        const rowspan = mapInfo ? mapInfo.rowspan : 1;
+        const cellDef = (r.cells && r.cells[c.id]) || {};
         const eff = Object.assign({}, c, cellDef.override || {});
+        const styleInfo = this.getEffectiveCellStyle(c, cellDef);
+
         let val = rec.cellValues?.[r.id]?.[c.id];
         if (val === undefined) val = cellDef.value ?? '';
 
@@ -469,60 +557,65 @@ window.App = {
           displayHtml = val !== '' ? String(val) : '';
         }
 
-        rowsHtml += `<td colspan="${colspan}" style="text-align:${eff.align || 'center'}">${displayHtml}</td>`;
+        rowsHtml += `<td colspan="${colspan}" rowspan="${rowspan}" style="${styleInfo.cssText}">${displayHtml}</td>`;
       });
       rowsHtml += '</tr>';
     });
 
     container.innerHTML = `
-      <div class="border-b-2 border-slate-900 pb-2.5 mb-3 flex items-end justify-between">
-        <div>
-          <div class="text-xs font-bold text-slate-600">${tpl.department || 'Y642 電力維護課'}｜分類標籤：【${rec.tag}】｜週期：【${tpl.cycle || '每月'}】</div>
-          <h2 class="text-lg font-black tracking-wide mt-0.5">${tpl.name}</h2>
+      <!-- 上半部：表單標題與定檢表格 -->
+      <div class="w-full">
+        <div class="border-b-2 border-slate-900 pb-2.5 mb-3 flex items-end justify-between">
+          <div>
+            <h2 class="text-xl font-black tracking-wide">${tpl.name}</h2>
+          </div>
+          <div class="text-right text-xs space-y-0.5 font-mono">
+            <div>表單編號：${tpl.code}</div>
+            <div>定檢月份：${rec.month}</div>
+            <div>點檢日期：${rec.inspectDate}</div>
+          </div>
         </div>
-        <div class="text-right text-xs space-y-0.5 font-mono">
-          <div>表單編號：${tpl.code}</div>
-          <div>定檢月份：${rec.month}</div>
-          <div>點檢日期：${rec.inspectDate}</div>
-        </div>
+
+        <table class="pdf-table mb-3">
+          <thead>
+            <tr>
+              ${tpl.columns.map(c => `<th style="width:${c.width || 100}px; font-size:${c.fontSize || 12}px;">${c.title}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
       </div>
 
-      <table class="pdf-table mb-3">
-        <thead>
-          <tr>
-            ${tpl.columns.map(c => `<th style="width:${c.width || 100}px">${c.title}</th>`).join('')}
-          </tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-        </tbody>
-      </table>
+      <!-- 下半部：自動推至 A4 最下方之綜合備註與簽核格 -->
+      <div class="w-full mt-auto pt-2">
+        <div class="border border-slate-800 p-2 text-xs mb-2.5">
+          <strong>綜合備註與異常說明：</strong> ${rec.note || '無異常事項。'}
+        </div>
 
-      <div class="border border-slate-800 p-2 text-xs mb-3">
-        <strong>綜合備註與異常說明：</strong> ${rec.note || '無異常事項。'}
+        <table class="pdf-table">
+          <thead>
+            <tr>
+              <th class="w-1/3">檢查人</th>
+              <th class="w-1/3">股長</th>
+              <th class="w-1/3">課長</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="text-center">${renderSignBox(rec.approvals?.tech)}</td>
+              <td class="text-center">${renderSignBox(rec.approvals?.leader)}</td>
+              <td class="text-center">${renderSignBox(rec.approvals?.chief)}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-
-      <table class="pdf-table">
-        <thead>
-          <tr>
-            <th class="w-1/3">檢查人</th>
-            <th class="w-1/3">股長</th>
-            <th class="w-1/3">課長</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="text-center">${renderSignBox(rec.approvals?.tech)}</td>
-            <td class="text-center">${renderSignBox(rec.approvals?.leader)}</td>
-            <td class="text-center">${renderSignBox(rec.approvals?.chief)}</td>
-          </tr>
-        </tbody>
-      </table>
     `;
   },
 
   /**
-   * 匯出並下載 PDF（消除多餘空白頁）
+   * 匯出並下載 PDF（維持標準 A4 大小且簽核格置底，不產生多餘空白頁）
    */
   downloadPdfFile() {
     const rec = DB.state.records.find(r => r.id === this.pdfTargetRecordId);
@@ -531,7 +624,7 @@ window.App = {
     const filename = `${rec ? rec.templateName + '_' + rec.month : 'Y642定檢表'}.pdf`;
 
     html2pdf().set({
-      margin: [6, 6, 6, 6],
+      margin: 0,
       filename,
       image: { type: 'jpeg', quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true, scrollY: 0 },
@@ -539,7 +632,7 @@ window.App = {
       pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
     }).from(element).toPdf().get('pdf').then((pdf) => {
       const totalPages = pdf.internal.getNumberOfPages();
-      if (totalPages > 1 && element.scrollHeight < 1020) {
+      if (totalPages > 1 && element.scrollHeight < 1150) {
         pdf.deletePage(totalPages);
       }
     }).save();

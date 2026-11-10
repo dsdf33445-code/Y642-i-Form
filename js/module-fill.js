@@ -1,8 +1,8 @@
 /**
  * 模組 1：填寫表單 / 待簽核表單
  * - 依當前使用者顯示可填寫的表單（預設僅能填寫該股及其他表單，或依人員管理設定之顯示表單）
- * - 三級簽核欄名稱改為：檢查人、股長、課長
- * - 支援共用技術員帳號 (Y642A~D) 切換實際填表人姓名
+ * - 完整支援設計表單設定之「上下合併 (rowspan)」、「左右合併 (colspan)」、「靠左/置中/靠右對齊」與「字型大小」
+ * - 三級簽核欄名稱：檢查人、股長、課長
  */
 window.ModuleFill = {
   filterTag: 'ALL',
@@ -240,13 +240,13 @@ window.ModuleFill = {
         </div>
       </div>
 
-      <!-- 填寫表格區 (支援手機水平滑動 RWD) -->
+      <!-- 填寫表格區 (支援手機水平滑動 RWD + 上下/左右合併 + 對齊與字型大小) -->
       <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div class="overflow-x-auto">
           <table class="sheet-grid">
             <thead>
               <tr>
-                ${tpl.columns.map(c => `<th class="col-header" style="width:${c.width || 110}px">${c.title}</th>`).join('')}
+                ${tpl.columns.map(c => `<th class="col-header" style="width:${c.width || 110}px; font-size:${c.fontSize || 12}px;">${c.title}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
@@ -283,10 +283,14 @@ window.ModuleFill = {
   },
 
   renderFillTableRows(rec, tpl, canEditCells) {
-    return tpl.rows.map(r => {
+    const gridMap = App.computeMergedGridMap(tpl);
+
+    return tpl.rows.map((r, rIdx) => {
+      const rowHeightStyle = r.height ? `style="height:${r.height}px"` : '';
+
       if (r.isSection) {
         return `
-          <tr>
+          <tr ${rowHeightStyle}>
             <td colspan="${tpl.columns.length}" class="bg-slate-800 text-white font-bold text-xs px-3 py-2">
               <i class="fa-solid fa-layer-group mr-1.5 text-blue-400"></i>${r.sectionTitle}
             </td>
@@ -294,25 +298,24 @@ window.ModuleFill = {
         `;
       }
 
-      let skip = 0;
-      const cellsHtml = tpl.columns.map(c => {
-        if (skip > 0) {
-          skip--;
-          return '';
-        }
-        const cellDef = (r.cells && r.cells[c.id]) || {};
-        const colspan = parseInt(cellDef.colspan, 10) || 1;
-        if (colspan > 1) skip = colspan - 1;
+      const cellsHtml = tpl.columns.map((c, cIdx) => {
+        const mapInfo = gridMap[rIdx]?.[cIdx];
+        if (mapInfo && mapInfo.skip) return '';
 
+        const colspan = mapInfo ? mapInfo.colspan : 1;
+        const rowspan = mapInfo ? mapInfo.rowspan : 1;
+        const cellDef = (r.cells && r.cells[c.id]) || {};
         const eff = Object.assign({}, c, cellDef.override || {});
+        const styleInfo = App.getEffectiveCellStyle(c, cellDef);
         const isReadOnly = !canEditCells || cellDef.readOnly;
+
         let val = rec.cellValues?.[r.id]?.[c.id];
         if (val === undefined) val = cellDef.value ?? '';
 
         if (eff.type === 'sum') {
           const sumVal = App.computeSumCellValue(tpl, r, c, rec.cellValues);
           return `
-            <td colspan="${colspan}" class="bg-amber-50/70 px-2 py-2 text-center font-mono text-xs font-extrabold text-amber-900">
+            <td colspan="${colspan}" rowspan="${rowspan}" style="${styleInfo.cssText}" class="bg-amber-50/70 px-2 py-2 font-mono font-extrabold text-amber-900">
               ∑ ${sumVal} ${eff.unit || ''}
             </td>
           `;
@@ -320,7 +323,7 @@ window.ModuleFill = {
 
         if (cellDef.readOnly && eff.type === 'text') {
           return `
-            <td colspan="${colspan}" class="bg-slate-50 px-2.5 py-2 text-xs text-slate-700" style="text-align:${eff.align || 'left'}">
+            <td colspan="${colspan}" rowspan="${rowspan}" class="bg-slate-50 px-2.5 py-2 text-slate-700" style="${styleInfo.cssText}">
               ${val}
             </td>
           `;
@@ -334,11 +337,12 @@ window.ModuleFill = {
           const rangeHint = (hasMin || hasMax) ? `${hasMin ? eff.min : '-∞'} ~ ${hasMax ? eff.max : '∞'} ${eff.unit || ''}` : '';
 
           return `
-            <td colspan="${colspan}" class="p-1.5 ${isOut ? 'cell-out-of-range' : (val !== '' ? 'cell-in-range' : '')}">
+            <td colspan="${colspan}" rowspan="${rowspan}" style="${styleInfo.bgColor ? `background-color:${styleInfo.bgColor};` : ''}" class="p-1.5 ${isOut ? 'cell-out-of-range' : (val !== '' ? 'cell-in-range' : '')}">
               <div class="flex items-center gap-1">
                 <input type="number" step="any" value="${val}" ${isReadOnly ? 'disabled' : ''}
+                  style="${styleInfo.cssText}"
                   onchange="ModuleFill.updateCellValue('${rec.id}','${r.id}','${c.id}',this.value)"
-                  class="w-full px-2 py-1 text-xs font-mono border border-slate-300 rounded-lg text-center bg-white focus:outline-none focus:border-blue-600" />
+                  class="w-full px-2 py-1 font-mono border border-slate-300 rounded-lg bg-white focus:outline-none focus:border-blue-600" />
                 ${eff.unit ? `<span class="text-[11px] text-slate-500 font-mono shrink-0">${eff.unit}</span>` : ''}
               </div>
               <div class="flex items-center justify-between text-[10px] mt-0.5 px-1">
@@ -352,8 +356,8 @@ window.ModuleFill = {
         if (eff.type === 'checkbox') {
           const checked = Boolean(val);
           return `
-            <td colspan="${colspan}" class="p-2 text-center">
-              <label class="inline-flex items-center gap-1.5 cursor-pointer select-none text-xs font-bold ${checked ? 'text-emerald-700' : 'text-slate-500'}">
+            <td colspan="${colspan}" rowspan="${rowspan}" style="${styleInfo.cssText}" class="p-2">
+              <label class="inline-flex items-center gap-1.5 cursor-pointer select-none font-bold ${checked ? 'text-emerald-700' : 'text-slate-500'}">
                 <input type="checkbox" ${checked ? 'checked' : ''} ${isReadOnly ? 'disabled' : ''}
                   onchange="ModuleFill.updateCellValue('${rec.id}','${r.id}','${c.id}',this.checked)"
                   class="w-4 h-4 accent-emerald-600 rounded" />
@@ -366,10 +370,11 @@ window.ModuleFill = {
         if (eff.type === 'select') {
           const opts = Array.isArray(eff.options) ? eff.options : ['合格', '待追蹤', '異常需檢修'];
           return `
-            <td colspan="${colspan}" class="p-1.5">
+            <td colspan="${colspan}" rowspan="${rowspan}" style="${styleInfo.bgColor ? `background-color:${styleInfo.bgColor};` : ''}" class="p-1.5">
               <select ${isReadOnly ? 'disabled' : ''}
+                style="${styleInfo.cssText}"
                 onchange="ModuleFill.updateCellValue('${rec.id}','${r.id}','${c.id}',this.value)"
-                class="w-full px-2 py-1.5 text-xs font-bold border border-slate-300 rounded-lg bg-white">
+                class="w-full px-2 py-1.5 font-bold border border-slate-300 rounded-lg bg-white">
                 <option value="">-- 請選擇 --</option>
                 ${opts.map(o => `<option value="${o}" ${val === o ? 'selected' : ''}>${o}</option>`).join('')}
               </select>
@@ -379,24 +384,26 @@ window.ModuleFill = {
 
         if (eff.type === 'date') {
           return `
-            <td colspan="${colspan}" class="p-1.5">
+            <td colspan="${colspan}" rowspan="${rowspan}" style="${styleInfo.bgColor ? `background-color:${styleInfo.bgColor};` : ''}" class="p-1.5">
               <input type="date" value="${val}" ${isReadOnly ? 'disabled' : ''}
+                style="${styleInfo.cssText}"
                 onchange="ModuleFill.updateCellValue('${rec.id}','${r.id}','${c.id}',this.value)"
-                class="w-full px-2 py-1 text-xs font-mono border border-slate-300 rounded-lg bg-white text-center" />
+                class="w-full px-2 py-1 font-mono border border-slate-300 rounded-lg bg-white" />
             </td>
           `;
         }
 
         return `
-          <td colspan="${colspan}" class="p-1.5">
+          <td colspan="${colspan}" rowspan="${rowspan}" style="${styleInfo.bgColor ? `background-color:${styleInfo.bgColor};` : ''}" class="p-1.5">
             <input type="text" value="${val}" ${isReadOnly ? 'disabled' : ''}
+              style="${styleInfo.cssText}"
               onchange="ModuleFill.updateCellValue('${rec.id}','${r.id}','${c.id}',this.value)"
-              class="w-full px-2 py-1 text-xs border border-slate-300 rounded-lg bg-white" />
+              class="w-full px-2 py-1 border border-slate-300 rounded-lg bg-white" />
           </td>
         `;
       }).join('');
 
-      return `<tr>${cellsHtml}</tr>`;
+      return `<tr ${rowHeightStyle}>${cellsHtml}</tr>`;
     }).join('');
   },
 
