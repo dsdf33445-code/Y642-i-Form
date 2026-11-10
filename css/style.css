@@ -127,6 +127,9 @@ body {
 .excel-cell.readonly-cell {
   background: #f8fafc;
 }
+.excel-cell.in-range-selection {
+  background-color: rgba(16, 124, 65, 0.12) !important;
+}
 .excel-cell.active-excel-cell {
   outline: 2px solid #107c41 !important;
   outline-offset: -2px;
@@ -153,11 +156,10 @@ body {
   outline: none;
   background: transparent;
   padding: 2px 6px;
-  font-size: 12px;
   color: #1e293b;
 }
 .excel-cell-input:focus {
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.9);
 }
 .cell-override-dot {
   position: absolute;
@@ -200,18 +202,23 @@ body {
   user-select: none;
 }
 
-/* A4 紙張預覽：移除固定 297mm 最小高度，避免列印與匯出 PDF 超出單頁產生空白頁 */
+/* ==================== A4 紙張預覽與簽核格置底排版 ==================== */
+.a4-sheet {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-sizing: border-box;
+  background: #ffffff;
+}
 .a4-sheet.portrait {
   width: 210mm;
-  height: auto;
+  min-height: 296mm;
   padding: 10mm 12mm;
-  box-sizing: border-box;
 }
 .a4-sheet.landscape {
   width: 297mm;
-  height: auto;
+  min-height: 209mm;
   padding: 8mm 10mm;
-  box-sizing: border-box;
 }
 .pdf-table {
   width: 100%;
@@ -223,15 +230,16 @@ body {
   padding: 5px 6px;
   font-size: 11px;
   line-height: 1.35;
+  vertical-align: middle;
 }
 .pdf-table th {
   background-color: #f1f5f9;
   font-weight: 700;
 }
 
-/* 列印專用規則：徹底消除非列印容器高度，防止多出一頁空白頁 */
+/* 列印專用規則：維持完整 A4 尺寸並讓簽核格自動置於 A4 最底部，同時防止空白第 2 頁 */
 @page {
-  margin: 8mm;
+  margin: 0;
 }
 
 @media print {
@@ -265,19 +273,29 @@ body {
     background: transparent !important;
   }
 
-  #pdf-render-container,
-  .a4-sheet.portrait,
-  .a4-sheet.landscape {
-    width: 100% !important;
-    max-width: 100% !important;
-    height: auto !important;
-    min-height: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
+  #pdf-render-container.a4-sheet.portrait {
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    width: 210mm !important;
+    min-height: 296mm !important;
+    padding: 10mm 12mm !important;
+    margin: 0 auto !important;
     box-shadow: none !important;
     page-break-after: avoid !important;
-    page-break-inside: avoid !important;
     break-after: avoid !important;
-    break-inside: avoid !important;
+  }
+
+  #pdf-render-container.a4-sheet.landscape {
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    width: 297mm !important;
+    min-height: 209mm !important;
+    padding: 8mm 10mm !important;
+    margin: 0 auto !important;
+    box-shadow: none !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
   }
 }
