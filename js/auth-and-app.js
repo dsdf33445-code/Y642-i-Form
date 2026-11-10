@@ -47,6 +47,24 @@ window.App = {
     if (errEl) errEl.classList.add('hidden');
   },
 
+  /**
+   * 取得乾淨的「職位」名稱（去除括號附註，例如將「B股股長 (最高管理員)」轉為「B股股長」）
+   */
+  getCleanTitle(user) {
+    if (!user) return '';
+    return String(user.roleTitle || '').replace(/\s*[\(（].*?[\)）]/g, '').trim();
+  },
+
+  /**
+   * 取得右上角顯示之「職位 + 姓名」（例如：課長 李宗霖、B股股長 鄭毓邦、B股技術員 吳宗穎）
+   */
+  getFormattedUserHeaderTitle(user) {
+    if (!user) return '';
+    const cleanTitle = this.getCleanTitle(user);
+    const personName = user.isSharedAccount ? (this.activeTechMember || user.members?.[0] || user.name) : user.name;
+    return `${cleanTitle} ${personName}`;
+  },
+
   handleLogin(e) {
     e.preventDefault();
     const accInput = document.getElementById('login-account').value.trim().toUpperCase();
@@ -73,7 +91,7 @@ window.App = {
     }));
 
     this.enterAppShell();
-    this.toast(`歡迎登入，${matchedUser.name} (${matchedUser.roleTitle})`, 'success');
+    this.toast(`歡迎登入，${this.getFormattedUserHeaderTitle(matchedUser)}`, 'success');
   },
 
   handleLogout() {
@@ -86,11 +104,6 @@ window.App = {
 
   /**
    * 依據登入者角色回傳可顯示的模組清單
-   * 規則：
-   * - 課長(chief)：待簽核表單(fill)、已完成表單(completed)
-   * - 股長/工程師(leader/engineer)：填寫表單(fill)、設計表單(builder)、表單管理(manage)、已完成表單(completed)
-   * - 技術員(tech)：填寫表單(fill)、已完成表單(completed)
-   * - 最高權限管理者 鄭毓邦(209874)：額外顯示「人員管理(personnel)」
    */
   getAllowedModulesForCurrentUser() {
     const u = this.currentUser;
@@ -113,14 +126,12 @@ window.App = {
         { id: 'completed', title: '已完成表單', icon: 'fa-box-archive' }
       ];
     } else {
-      // 技術員
       modules = [
         { id: 'fill', title: '填寫表單', icon: 'fa-pen-to-square' },
         { id: 'completed', title: '已完成表單', icon: 'fa-box-archive' }
       ];
     }
 
-    // 只有最高權限管理者 鄭毓邦 (209874) 可以看到並進入「人員管理」
     if (u.id === AppConfig.SUPER_ADMIN_ID) {
       modules.push({ id: 'personnel', title: '人員管理', icon: 'fa-users-gear' });
     }
@@ -164,16 +175,23 @@ window.App = {
     const freshUser = DB.state.users.find(item => item.id === u.id);
     if (freshUser) this.currentUser = freshUser;
 
-    const displayMember = u.isSharedAccount ? `${u.name} (${this.activeTechMember})` : u.name;
-    document.getElementById('current-user-display').textContent = displayMember;
-    document.getElementById('current-group-display').textContent = `[${u.group}]`;
-    document.getElementById('current-role-badge').textContent = u.roleTitle;
-    document.getElementById('sidebar-account-code').textContent = `帳號: ${u.account}`;
+    // 右上角只顯示「職位 + 姓名」（例：課長 李宗霖，B股股長 鄭毓邦，B股技術員 吳宗穎）
+    const headerDisplayEl = document.getElementById('current-user-display');
+    if (headerDisplayEl) {
+      headerDisplayEl.textContent = this.getFormattedUserHeaderTitle(this.currentUser);
+    }
 
+    const accCodeEl = document.getElementById('sidebar-account-code');
+    if (accCodeEl) {
+      accCodeEl.textContent = `帳號: ${u.account}`;
+    }
+
+    // 左下角職章預覽：只顯示 姓名 + 日期(年月日)
     const sealName = u.isSharedAccount ? this.activeTechMember : (u.sealText || u.name);
+    const todayStr = new Date().toISOString().slice(0, 10);
     document.getElementById('sidebar-seal-preview').innerHTML = this.renderSealHTML({
       name: sealName,
-      roleTitle: u.sealSub || u.roleTitle,
+      time: todayStr,
       customSignature: u.customSignature
     });
 
@@ -181,10 +199,10 @@ window.App = {
     const supChief = sup ? DB.state.users.find(x => x.id === sup.supervisorId) : null;
     let chainHtml = `<div class="text-slate-400">所屬分類：<span class="text-white font-semibold">${(u.allowedTags || []).join('、')}</span></div>`;
     if (sup) {
-      chainHtml += `<div class="mt-0.5 text-slate-400">直屬陳核：<span class="text-amber-300 font-semibold">${sup.name} (${sup.roleTitle})</span></div>`;
+      chainHtml += `<div class="mt-0.5 text-slate-400">直屬陳核：<span class="text-amber-300 font-semibold">${this.getCleanTitle(sup)} ${sup.name}</span></div>`;
     }
     if (supChief) {
-      chainHtml += `<div class="mt-0.5 text-slate-400">最終決行：<span class="text-emerald-300 font-semibold">${supChief.name} (${supChief.roleTitle})</span></div>`;
+      chainHtml += `<div class="mt-0.5 text-slate-400">最終決行：<span class="text-emerald-300 font-semibold">${this.getCleanTitle(supChief)} ${supChief.name}</span></div>`;
     }
     document.getElementById('sidebar-chain-info').innerHTML = chainHtml;
 
@@ -291,22 +309,22 @@ window.App = {
   },
 
   /**
-   * 產生電子職章或手寫簽名 HTML
+   * 產生電子職章或手寫簽名 HTML（只顯示 姓名 + 日期[年月日]）
    */
-  renderSealHTML({ name, roleTitle, time, customSignature }) {
+  renderSealHTML({ name, time, customSignature }) {
+    const dateStr = time ? String(time).slice(0, 10) : new Date().toISOString().slice(0, 10);
     if (customSignature) {
       return `
         <div class="inline-flex flex-col items-center">
-          <img src="${customSignature}" alt="${name}" class="h-11 object-contain" />
-          ${time ? `<span class="text-[9px] text-slate-500 font-mono">${time}</span>` : ''}
+          <img src="${customSignature}" alt="${name}" class="h-10 object-contain" />
+          <span class="text-[9px] text-red-600 font-mono font-bold mt-0.5">${dateStr}</span>
         </div>
       `;
     }
     return `
       <div class="traditional-seal">
-        <span class="text-[10px] tracking-tight border-b border-red-500/40 pb-0.5">${roleTitle || 'Y642 定檢章'}</span>
-        <span class="text-sm font-black py-0.5">${name || '未具名'}</span>
-        ${time ? `<span class="text-[8px] font-mono tracking-normal">${time.slice(0, 10)}</span>` : ''}
+        <span class="text-sm font-black tracking-widest border-b border-red-500/40 pb-0.5 px-1">${name || '未具名'}</span>
+        <span class="text-[9px] font-mono tracking-normal pt-0.5">${dateStr}</span>
       </div>
     `;
   },
@@ -362,20 +380,18 @@ window.App = {
     const container = document.getElementById('pdf-render-container');
     container.className = `a4-sheet ${orient} bg-white text-black shadow-2xl`;
 
-    const renderSignBox = (stageObj, defaultLabel) => {
+    const renderSignBox = (stageObj) => {
       if (!stageObj) {
-        return `<div class="h-16 flex items-center justify-center text-slate-300 text-xs">（待簽核）</div>`;
+        return `<div class="h-14 flex items-center justify-center text-slate-300 text-xs">（待簽核）</div>`;
       }
       const userObj = DB.state.users.find(u => u.id === stageObj.accountId);
       return `
         <div class="flex flex-col items-center justify-center py-1">
           ${this.renderSealHTML({
             name: stageObj.name,
-            roleTitle: stageObj.roleTitle || defaultLabel,
             time: stageObj.time,
             customSignature: userObj?.customSignature
           })}
-          ${stageObj.comment ? `<div class="text-[10px] text-slate-600 mt-1">${stageObj.comment}</div>` : ''}
         </div>
       `;
     };
@@ -430,10 +446,10 @@ window.App = {
     });
 
     container.innerHTML = `
-      <div class="border-b-2 border-slate-900 pb-3 mb-3 flex items-end justify-between">
+      <div class="border-b-2 border-slate-900 pb-2.5 mb-3 flex items-end justify-between">
         <div>
           <div class="text-xs font-bold text-slate-600">${tpl.department || 'Y642 電力維護課'}｜分類標籤：【${rec.tag}】</div>
-          <h2 class="text-xl font-black tracking-wide mt-0.5">${tpl.name}</h2>
+          <h2 class="text-lg font-black tracking-wide mt-0.5">${tpl.name}</h2>
         </div>
         <div class="text-right text-xs space-y-0.5 font-mono">
           <div>表單編號：${tpl.code}</div>
@@ -442,7 +458,7 @@ window.App = {
         </div>
       </div>
 
-      <table class="pdf-table mb-4">
+      <table class="pdf-table mb-3">
         <thead>
           <tr>
             ${tpl.columns.map(c => `<th style="width:${c.width || 100}px">${c.title}</th>`).join('')}
@@ -453,7 +469,7 @@ window.App = {
         </tbody>
       </table>
 
-      <div class="border border-slate-800 p-2.5 text-xs mb-4">
+      <div class="border border-slate-800 p-2 text-xs mb-3">
         <strong>綜合備註與異常說明：</strong> ${rec.note || '無異常事項。'}
       </div>
 
@@ -467,15 +483,18 @@ window.App = {
         </thead>
         <tbody>
           <tr>
-            <td class="text-center">${renderSignBox(rec.approvals?.tech, '點檢技術員')}</td>
-            <td class="text-center">${renderSignBox(rec.approvals?.leader, '股長/工程師')}</td>
-            <td class="text-center">${renderSignBox(rec.approvals?.chief, '課長')}</td>
+            <td class="text-center">${renderSignBox(rec.approvals?.tech)}</td>
+            <td class="text-center">${renderSignBox(rec.approvals?.leader)}</td>
+            <td class="text-center">${renderSignBox(rec.approvals?.chief)}</td>
           </tr>
         </tbody>
       </table>
     `;
   },
 
+  /**
+   * 匯出並下載 PDF（消除多餘空白頁）
+   */
   downloadPdfFile() {
     const rec = DB.state.records.find(r => r.id === this.pdfTargetRecordId);
     const orient = document.getElementById('pdf-orientation').value;
@@ -483,12 +502,19 @@ window.App = {
     const filename = `${rec ? rec.templateName + '_' + rec.month : 'Y642定檢表'}.pdf`;
 
     html2pdf().set({
-      margin: 5,
+      margin: [6, 6, 6, 6],
       filename,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: orient }
-    }).from(element).save();
+      html2canvas: { scale: 2, useCORS: true, scrollY: 0 },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: orient },
+      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+    }).from(element).toPdf().get('pdf').then((pdf) => {
+      const totalPages = pdf.internal.getNumberOfPages();
+      // 若單頁高度內因邊界誤差產生第2頁空白頁，自動刪除多餘空白頁
+      if (totalPages > 1 && element.scrollHeight < 1020) {
+        pdf.deletePage(totalPages);
+      }
+    }).save();
   },
 
   updateSyncBadge(status, text) {

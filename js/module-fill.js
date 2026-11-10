@@ -12,14 +12,11 @@ window.ModuleFill = {
     const u = App.currentUser;
     if (!container || !u) return;
 
-    // 篩選此使用者可存取的表單範本
     const accessibleTemplates = DB.state.templates.filter(tpl => App.canUserAccessTemplate(u, tpl));
 
-    // 篩選此使用者可見的進行中定檢單 (未結案)
     const activeRecords = DB.state.records.filter(r => {
       if (r.stage === 'completed') return false;
       if (u.role === 'chief') {
-        // 課長：主要顯示待課長簽核，亦可查看各股呈報中表單
         return r.stage === 'pending_chief' || r.currentAssigneeId === u.id;
       }
       const tpl = DB.state.templates.find(t => t.id === r.templateId);
@@ -28,7 +25,6 @@ window.ModuleFill = {
     });
 
     if (!App.activeRecordId || !activeRecords.some(r => r.id === App.activeRecordId)) {
-      // 優先選擇待本人簽核或填寫的紀錄
       const myTurn = activeRecords.find(r => r.currentAssigneeId === u.id);
       App.activeRecordId = myTurn ? myTurn.id : (activeRecords[0]?.id || null);
     }
@@ -168,7 +164,6 @@ window.ModuleFill = {
     const canEditCells = (rec.stage === 'draft_tech' && (rec.fillerAccountId === u.id || u.role === 'leader' || u.role === 'engineer')) ||
                          (rec.stage === 'pending_leader' && rec.currentAssigneeId === u.id);
 
-    // 判斷簽核鏈上對應的股長/工程師與課長名稱
     const fillerAcc = DB.state.users.find(x => x.id === rec.fillerAccountId);
     const leaderUser = fillerAcc ? DB.state.users.find(x => x.id === fillerAcc.supervisorId) : null;
     const chiefUser = DB.state.users.find(x => x.role === 'chief');
@@ -192,19 +187,19 @@ window.ModuleFill = {
           </div>
         </div>
 
-        <!-- 逐級陳核三階段視覺卡片 -->
+        <!-- 逐級陳核三階段視覺卡片 (簽章只顯示 姓名 + 年月日) -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
           <!-- Stage 1: 技術員 -->
           <div class="p-3 rounded-xl border ${rec.stage === 'draft_tech' ? 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-100' : 'border-slate-200 bg-slate-50'} flex items-center justify-between">
             <div>
               <div class="font-bold text-slate-700">1. 點檢技術員填寫</div>
               <div class="text-[11px] text-slate-500 mt-0.5">
-                負責：${rec.approvals?.tech ? rec.approvals.tech.name : `${rec.fillerMemberName} (${rec.fillerAccountId})`}
+                負責：${rec.approvals?.tech ? rec.approvals.tech.name : `${rec.fillerMemberName}`}
               </div>
-              ${rec.approvals?.tech ? `<div class="text-[10px] text-emerald-600 font-mono mt-0.5">✓ 已陳核 ${rec.approvals.tech.time}</div>` : '<div class="text-[10px] text-blue-600 font-bold mt-0.5">● 填寫作業中</div>'}
+              ${rec.approvals?.tech ? `<div class="text-[10px] text-emerald-600 font-mono mt-0.5">✓ 已陳核 ${rec.approvals.tech.time.slice(0, 10)}</div>` : '<div class="text-[10px] text-blue-600 font-bold mt-0.5">● 填寫作業中</div>'}
             </div>
             <div>
-              ${rec.approvals?.tech ? App.renderSealHTML({ name: rec.approvals.tech.name, roleTitle: rec.approvals.tech.roleTitle }) : ''}
+              ${rec.approvals?.tech ? App.renderSealHTML({ name: rec.approvals.tech.name, time: rec.approvals.tech.time }) : ''}
             </div>
           </div>
 
@@ -213,14 +208,14 @@ window.ModuleFill = {
             <div>
               <div class="font-bold text-slate-700">2. 股長 / 工程師複核</div>
               <div class="text-[11px] text-slate-500 mt-0.5">
-                負責：${rec.approvals?.leader ? rec.approvals.leader.name : (leaderUser ? `${leaderUser.name} (${leaderUser.roleTitle})` : '各股股長')}
+                負責：${rec.approvals?.leader ? rec.approvals.leader.name : (leaderUser ? `${leaderUser.name}` : '各股股長')}
               </div>
               ${rec.approvals?.leader
-                ? `<div class="text-[10px] text-emerald-600 font-mono mt-0.5">✓ 已複核 ${rec.approvals.leader.time}</div>`
+                ? `<div class="text-[10px] text-emerald-600 font-mono mt-0.5">✓ 已複核 ${rec.approvals.leader.time.slice(0, 10)}</div>`
                 : (rec.stage === 'pending_leader' ? '<div class="text-[10px] text-amber-600 font-bold mt-0.5">● 待複核簽章</div>' : '<div class="text-[10px] text-slate-400 mt-0.5">等待上一級陳核</div>')}
             </div>
             <div>
-              ${rec.approvals?.leader ? App.renderSealHTML({ name: rec.approvals.leader.name, roleTitle: rec.approvals.leader.roleTitle }) : ''}
+              ${rec.approvals?.leader ? App.renderSealHTML({ name: rec.approvals.leader.name, time: rec.approvals.leader.time }) : ''}
             </div>
           </div>
 
@@ -229,14 +224,14 @@ window.ModuleFill = {
             <div>
               <div class="font-bold text-slate-700">3. 課長決行核定</div>
               <div class="text-[11px] text-slate-500 mt-0.5">
-                負責：${chiefUser ? `${chiefUser.name} (${chiefUser.roleTitle})` : '李宗霖 (課長)'}
+                負責：${chiefUser ? `${chiefUser.name}` : '李宗霖'}
               </div>
               ${rec.approvals?.chief
-                ? `<div class="text-[10px] text-emerald-600 font-mono mt-0.5">✓ 已核定 ${rec.approvals.chief.time}</div>`
+                ? `<div class="text-[10px] text-emerald-600 font-mono mt-0.5">✓ 已核定 ${rec.approvals.chief.time.slice(0, 10)}</div>`
                 : (rec.stage === 'pending_chief' ? '<div class="text-[10px] text-purple-600 font-bold mt-0.5">● 待課長決行</div>' : '<div class="text-[10px] text-slate-400 mt-0.5">等待股長/工程師陳核</div>')}
             </div>
             <div>
-              ${rec.approvals?.chief ? App.renderSealHTML({ name: rec.approvals.chief.name, roleTitle: rec.approvals.chief.roleTitle }) : ''}
+              ${rec.approvals?.chief ? App.renderSealHTML({ name: rec.approvals.chief.name, time: rec.approvals.chief.time }) : ''}
             </div>
           </div>
         </div>
@@ -271,7 +266,7 @@ window.ModuleFill = {
         <div class="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
           <div class="text-xs text-slate-500">
             ${isMyTurn
-              ? `<span class="text-blue-700 font-bold"><i class="fa-solid fa-circle-Exclamation mr-1"></i>目前輪到您處理此表單，確認無誤後請點擊右側按鈕蓋章陳核。</span>`
+              ? `<span class="text-blue-700 font-bold"><i class="fa-solid fa-circle-exclamation mr-1"></i>目前輪到您處理此表單，確認無誤後請點擊右側按鈕蓋章陳核。</span>`
               : `<span>目前待處理人：<strong>${this.getUserDisplayName(rec.currentAssigneeId)}</strong></span>`
             }
           </div>
@@ -311,7 +306,6 @@ window.ModuleFill = {
         let val = rec.cellValues?.[r.id]?.[c.id];
         if (val === undefined) val = cellDef.value ?? '';
 
-        // 1. 自動加總 (SUM)
         if (eff.type === 'sum') {
           const sumVal = App.computeSumCellValue(tpl, r, c, rec.cellValues);
           return `
@@ -321,7 +315,6 @@ window.ModuleFill = {
           `;
         }
 
-        // 2. 唯讀文字欄 (如項次、檢查項目、標準說明)
         if (cellDef.readOnly && eff.type === 'text') {
           return `
             <td colspan="${colspan}" class="bg-slate-50 px-2.5 py-2 text-xs text-slate-700" style="text-align:${eff.align || 'left'}">
@@ -330,7 +323,6 @@ window.ModuleFill = {
           `;
         }
 
-        // 3. 數值輸入 + 最低/最高值限制
         if (eff.type === 'number') {
           const num = parseFloat(val);
           const hasMin = eff.min !== undefined && eff.min !== '' && !isNaN(parseFloat(eff.min));
@@ -354,7 +346,6 @@ window.ModuleFill = {
           `;
         }
 
-        // 4. 勾選方塊 (Checkbox)
         if (eff.type === 'checkbox') {
           const checked = Boolean(val);
           return `
@@ -369,7 +360,6 @@ window.ModuleFill = {
           `;
         }
 
-        // 5. 下拉清單 (Select)
         if (eff.type === 'select') {
           const opts = Array.isArray(eff.options) ? eff.options : ['合格', '待追蹤', '異常需檢修'];
           return `
@@ -384,7 +374,6 @@ window.ModuleFill = {
           `;
         }
 
-        // 6. 日期選擇 (Date)
         if (eff.type === 'date') {
           return `
             <td colspan="${colspan}" class="p-1.5">
@@ -395,7 +384,6 @@ window.ModuleFill = {
           `;
         }
 
-        // 預設可編輯文字
         return `
           <td colspan="${colspan}" class="p-1.5">
             <input type="text" value="${val}" ${isReadOnly ? 'disabled' : ''}
@@ -418,7 +406,7 @@ window.ModuleFill = {
     if (rec.stage === 'draft_tech') {
       const fillerAcc = DB.state.users.find(x => x.id === rec.fillerAccountId) || u;
       const nextSup = DB.state.users.find(x => x.id === fillerAcc.supervisorId);
-      const nextLabel = nextSup ? `${nextSup.name} (${nextSup.roleTitle})` : '下一層級主管';
+      const nextLabel = nextSup ? `${App.getCleanTitle(nextSup)} ${nextSup.name}` : '下一層級主管';
       return `
         <button onclick="ModuleFill.submitToNextStage('${rec.id}')"
           class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md flex items-center gap-2 transition">
@@ -461,7 +449,7 @@ window.ModuleFill = {
 
   getUserDisplayName(userId) {
     const found = DB.state.users.find(u => u.id === userId);
-    return found ? `${found.name} (${found.roleTitle})` : (userId || '無');
+    return found ? `${App.getCleanTitle(found)} ${found.name}` : (userId || '無');
   },
 
   selectRecord(recId) {
@@ -475,7 +463,6 @@ window.ModuleFill = {
       userId: App.currentUser.id,
       activeTechMember: memberName
     }));
-    // 若當前表單為草稿且屬該股技術員建立，同步更新填表技術員姓名
     const rec = DB.state.records.find(r => r.id === App.activeRecordId);
     if (rec && rec.stage === 'draft_tech' && rec.fillerAccountId === App.currentUser.id) {
       rec.fillerMemberName = memberName;
@@ -483,7 +470,7 @@ window.ModuleFill = {
     }
     App.renderHeaderAndSidebarUser();
     this.render();
-    App.toast(`已切換填表技術員為：${memberName}`, 'info');
+    App.toast(`已切換填表人為：${App.getFormattedUserHeaderTitle(App.currentUser)}`, 'info');
   },
 
   updateCellValue(recId, rowId, colId, val) {
@@ -541,14 +528,14 @@ window.ModuleFill = {
       rec.approvals.tech = {
         accountId: u.id,
         name: signerName,
-        roleTitle: u.roleTitle,
+        roleTitle: App.getCleanTitle(u),
         time: nowStr,
         comment: '點檢完成陳核'
       };
       rec.fillerMemberName = signerName;
       rec.stage = 'pending_leader';
       rec.currentAssigneeId = nextSupId;
-      rec.logs.push({ time: nowStr, actor: `${signerName} (${u.roleTitle})`, action: `完成填表並陳核給 ${this.getUserDisplayName(nextSupId)}` });
+      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${signerName}`, action: `完成填表並陳核給 ${this.getUserDisplayName(nextSupId)}` });
 
       DB.save();
       this.render();
@@ -563,13 +550,13 @@ window.ModuleFill = {
       rec.approvals.leader = {
         accountId: u.id,
         name: u.name,
-        roleTitle: u.roleTitle,
+        roleTitle: App.getCleanTitle(u),
         time: nowStr,
         comment: '複核通過呈課長'
       };
       rec.stage = 'pending_chief';
       rec.currentAssigneeId = chiefId;
-      rec.logs.push({ time: nowStr, actor: `${u.name} (${u.roleTitle})`, action: `複核簽章通過，陳核給課長 ${this.getUserDisplayName(chiefId)}` });
+      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: `複核簽章通過，陳核給 ${this.getUserDisplayName(chiefId)}` });
 
       DB.save();
       this.render();
@@ -581,13 +568,13 @@ window.ModuleFill = {
       rec.approvals.chief = {
         accountId: u.id,
         name: u.name,
-        roleTitle: u.roleTitle,
+        roleTitle: App.getCleanTitle(u),
         time: nowStr,
         comment: '決行核定'
       };
       rec.stage = 'completed';
       rec.currentAssigneeId = '';
-      rec.logs.push({ time: nowStr, actor: `${u.name} (${u.roleTitle})`, action: '課長決行核定，歸檔至已完成表單' });
+      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: '課長決行核定，歸檔至已完成表單' });
 
       DB.save();
       App.activeRecordId = null;
@@ -607,13 +594,13 @@ window.ModuleFill = {
       rec.approvals.chief = null;
       rec.stage = 'pending_leader';
       rec.currentAssigneeId = prevLeaderId;
-      rec.logs.push({ time: nowStr, actor: `${u.name} (${u.roleTitle})`, action: '退回股長/工程師重新確認' });
+      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: '退回股長/工程師重新確認' });
     } else if (rec.stage === 'pending_leader') {
       rec.approvals.tech = null;
       rec.approvals.leader = null;
       rec.stage = 'draft_tech';
       rec.currentAssigneeId = rec.fillerAccountId;
-      rec.logs.push({ time: nowStr, actor: `${u.name} (${u.roleTitle})`, action: '退回技術員重新填寫' });
+      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: '退回技術員重新填寫' });
     }
 
     DB.save();
