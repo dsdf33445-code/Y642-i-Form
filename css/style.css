@@ -6,8 +6,8 @@ body {
 
 /* 細緻捲軸 */
 ::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: #f1f5f9;
@@ -20,7 +20,7 @@ body {
   background: #64748b;
 }
 
-/* 類 Excel 設計器與填寫表格 */
+/* 填寫表格通用網格 */
 .sheet-grid {
   border-collapse: collapse;
   width: 100%;
@@ -31,7 +31,7 @@ body {
   border: 1px solid #cbd5e1;
   position: relative;
   vertical-align: middle;
-  transition: background-color 0.12s ease;
+  transition: background-color 0.1s ease;
 }
 .sheet-grid th.col-header {
   background: #f1f5f9;
@@ -40,31 +40,124 @@ body {
   font-size: 12px;
   text-align: center;
   height: 34px;
-  cursor: pointer;
   user-select: none;
 }
-.sheet-grid th.col-header:hover {
-  background: #e2e8f0;
+
+/* ==================== 內嵌式 EXCEL 試算表專屬樣式 ==================== */
+.excel-spreadsheet-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: #ffffff;
+  user-select: none;
 }
-.sheet-grid th.col-header.selected-col {
-  background: #dbeafe;
-  color: #1d4ed8;
-  border-bottom: 2px solid #2563eb;
+.excel-spreadsheet-table th,
+.excel-spreadsheet-table td {
+  border: 1px solid #d4d4d4;
+  position: relative;
+  box-sizing: border-box;
 }
-.sheet-grid td.row-header {
-  background: #f8fafc;
-  color: #64748b;
-  font-weight: 700;
-  font-size: 11px;
+.excel-corner-header {
+  background: #f3f2f1;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  border-right: 2px solid #b3b0ad !important;
+  border-bottom: 2px solid #b3b0ad !important;
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 30;
+}
+.excel-corner-header::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 0;
+  height: 0;
+  border-left: 10px solid transparent;
+  border-bottom: 10px solid #a19f9d;
+}
+.excel-col-header {
+  background: #f3f2f1;
+  color: #323130;
+  font-size: 12px;
+  height: 44px;
   text-align: center;
-  width: 42px;
-  user-select: none;
+  cursor: pointer;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  border-bottom: 2px solid #c8c6c4 !important;
 }
-.sheet-grid td.active-cell {
-  outline: 2px solid #2563eb;
+.excel-col-header:hover {
+  background: #e1dfdd;
+}
+.excel-col-header.selected-col {
+  background: #d2eae0 !important;
+  color: #107c41 !important;
+  border-bottom: 2.5px solid #107c41 !important;
+}
+.excel-row-header {
+  background: #f3f2f1;
+  color: #605e5c;
+  font-size: 11px;
+  font-weight: 700;
+  width: 44px;
+  min-width: 44px;
+  text-align: center;
+  cursor: pointer;
+  position: sticky;
+  left: 0;
+  z-index: 15;
+  border-right: 2px solid #c8c6c4 !important;
+}
+.excel-row-header.selected-row {
+  background: #d2eae0 !important;
+  color: #107c41 !important;
+  border-right: 2.5px solid #107c41 !important;
+}
+.excel-cell {
+  background: #ffffff;
+  height: 36px;
+  padding: 0;
+  vertical-align: middle;
+  cursor: cell;
+}
+.excel-cell.readonly-cell {
+  background: #f8fafc;
+}
+.excel-cell.active-excel-cell {
+  outline: 2px solid #107c41 !important;
   outline-offset: -2px;
-  background-color: #eff6ff !important;
-  z-index: 10;
+  background-color: #f3faf6 !important;
+  z-index: 12;
+}
+/* Excel 選取框右下角綠色填滿控點 */
+.excel-cell.active-excel-cell::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 6px;
+  height: 6px;
+  background: #107c41;
+  border: 1px solid #ffffff;
+  z-index: 15;
+  pointer-events: none;
+}
+.excel-cell-input {
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: #1e293b;
+}
+.excel-cell-input:focus {
+  background: #ffffff;
 }
 .cell-override-dot {
   position: absolute;
