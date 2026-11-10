@@ -8,6 +8,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+  <!-- SheetJS (xlsx) 用於匯入與匯出 Excel (.xlsx / .xls / .csv) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <!-- html2pdf.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <!-- 自訂樣式表 -->
@@ -171,7 +173,7 @@
         <!-- 模組 1：填寫表單 / 待簽核表單 -->
         <section id="view-fill" class="module-view flex-1 flex flex-col overflow-hidden"></section>
 
-        <!-- 模組 2：設計表單 -->
+        <!-- 模組 2：設計表單 (直接嵌入 EXCEL 試算表) -->
         <section id="view-builder" class="module-view hidden flex-1 flex flex-col overflow-hidden"></section>
 
         <!-- 模組 3：表單管理 -->
