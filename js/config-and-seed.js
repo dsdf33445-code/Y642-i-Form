@@ -1,5 +1,6 @@
 /**
  * Y642 每月定檢表系統 - 核心設定、預設種子資料與 Firebase Cloud Firestore 同步引擎
+ * 已直接內建 y642-monthly-inspection 專案之 Firebase 連線設定
  */
 window.AppConfig = {
   STORAGE_KEY: 'Y642_INSPECTION_SYSTEM_V3',
@@ -9,8 +10,15 @@ window.AppConfig = {
   SUPER_ADMIN_ID: '209874' // 鄭毓邦：唯一可進入人員管理之最高權限管理者
 };
 
-// 若您已有固定 Firebase 專案設定，可直接填入下方物件，部署至 Vercel 後所有使用者免設定自動連線：
-window.DEFAULT_FIREBASE_CONFIG = null;
+// 已直接綁定您的 Firebase 專案設定 (y642-monthly-inspection)，所有裝置開啟網頁即自動連線同步
+window.DEFAULT_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA2Q7pWW7TWqnFpazmyPQ_KuRJpoCqZ81A",
+  authDomain: "y642-monthly-inspection.firebaseapp.com",
+  projectId: "y642-monthly-inspection",
+  storageBucket: "y642-monthly-inspection.firebasestorage.app",
+  messagingSenderId: "372763684806",
+  appId: "1:372763684806:web:0517ac3f825b6413c74cc7"
+};
 
 /**
  * 產生預設人員與帳號清單（完全依照指定名單與密碼規則）
@@ -30,7 +38,7 @@ function createDefaultUsers() {
       members: ['李宗霖'],
       supervisorId: '', // 最終核定者
       allowedTags: ['A股', 'B股', 'C股', 'D股', '其他'],
-      allowedTemplateIds: [], // 空陣列代表依 allowedTags 顯示全部對應表單
+      allowedTemplateIds: [],
       sealText: '李宗霖',
       sealSub: 'Y642 課長',
       customSignature: ''
@@ -398,7 +406,7 @@ function createDefaultRecords(templates) {
       tag: 'B股',
       month: '2026-11',
       inspectDate: '2026-11-10',
-      stage: 'draft_tech', // draft_tech(技術員填寫中) -> pending_leader(待股長/工程師簽核) -> pending_chief(待課長簽核) -> completed(已完成)
+      stage: 'draft_tech',
       fillerAccountId: 'Y642B',
       fillerMemberName: '吳宗穎',
       currentAssigneeId: 'Y642B',
@@ -554,29 +562,42 @@ window.DB = {
           payload: JSON.stringify(this.state),
           updatedAt: this.state.updatedAt
         });
-        App.updateSyncBadge('cloud-ok', '雲端已同步');
+        if (window.App && typeof App.updateSyncBadge === 'function') {
+          App.updateSyncBadge('cloud-ok', '雲端已同步');
+        }
       } catch (err) {
         console.error('Firestore 同步寫入失敗:', err);
-        App.updateSyncBadge('cloud-err', '雲端寫入失敗(已存本機)');
+        if (window.App && typeof App.updateSyncBadge === 'function') {
+          App.updateSyncBadge('cloud-err', '雲端寫入失敗(已存本機)');
+        }
       }
     }
   },
 
   async initFirebaseIfConfigured() {
+    // 優先使用內建的 y642-monthly-inspection 設定，若使用者曾於介面手動覆寫則讀取手動設定
     let cfg = window.DEFAULT_FIREBASE_CONFIG;
     const savedCfgStr = localStorage.getItem(AppConfig.FIREBASE_CFG_KEY);
     if (savedCfgStr) {
       try {
-        cfg = JSON.parse(savedCfgStr);
+        const parsedCfg = JSON.parse(savedCfgStr);
+        if (parsedCfg && parsedCfg.apiKey && parsedCfg.projectId) {
+          cfg = parsedCfg;
+        }
       } catch (e) {}
     }
+
     if (!cfg || !cfg.apiKey || !cfg.projectId) {
-      App.updateSyncBadge('local', '本機儲存模式');
+      if (window.App && typeof App.updateSyncBadge === 'function') {
+        App.updateSyncBadge('local', '本機儲存模式');
+      }
       return;
     }
 
     try {
-      App.updateSyncBadge('syncing', '連線 Firebase 中...');
+      if (window.App && typeof App.updateSyncBadge === 'function') {
+        App.updateSyncBadge('syncing', '連線 Firebase 中...');
+      }
       const { initializeApp, getApps } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
       const { getFirestore, doc, onSnapshot, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
 
@@ -587,12 +608,34 @@ window.DB = {
 
       const snap = await getDoc(docRef);
       if (!snap.exists()) {
+        // 雲端尚無資料時，將預設人員與表單種子資料寫入 Firestore
         await setDoc(docRef, {
           payload: JSON.stringify(this.state),
           updatedAt: this.state.updatedAt
         });
+      } else {
+        // 雲端已有資料時，立即載入雲端最新狀態並更新畫面
+        const remoteData = snap.data();
+        if (remoteData && remoteData.payload) {
+          try {
+            const remoteState = JSON.parse(remoteData.payload);
+            if (remoteState && Array.isArray(remoteState.users)) {
+              this.state = remoteState;
+              localStorage.setItem(AppConfig.STORAGE_KEY, JSON.stringify(this.state));
+              if (window.App && App.currentUser) {
+                const updatedMe = this.state.users.find(u => u.id === App.currentUser.id);
+                if (updatedMe) App.currentUser = updatedMe;
+                App.renderHeaderAndSidebarUser();
+                App.refreshCurrentModuleView();
+              }
+            }
+          } catch (parseErr) {
+            console.error('初次解析雲端資料失敗:', parseErr);
+          }
+        }
       }
 
+      // 啟動即時監聽，任何同仁新增表單、填寫或蓋章陳核皆會即時同步
       onSnapshot(docRef, (docSnap) => {
         if (!docSnap.exists()) return;
         if (this.ignoreNextRemoteSnapshot) {
@@ -603,22 +646,35 @@ window.DB = {
         if (data && data.payload) {
           try {
             const remoteState = JSON.parse(data.payload);
-            this.state = remoteState;
-            localStorage.setItem(AppConfig.STORAGE_KEY, JSON.stringify(this.state));
-            App.refreshCurrentModuleView();
-            App.updateSyncBadge('cloud-ok', '雲端即時同步中');
+            if (remoteState && Array.isArray(remoteState.users)) {
+              this.state = remoteState;
+              localStorage.setItem(AppConfig.STORAGE_KEY, JSON.stringify(this.state));
+              if (window.App && App.currentUser) {
+                const updatedMe = this.state.users.find(u => u.id === App.currentUser.id);
+                if (updatedMe) App.currentUser = updatedMe;
+                App.renderHeaderAndSidebarUser();
+                App.refreshCurrentModuleView();
+              }
+              if (window.App && typeof App.updateSyncBadge === 'function') {
+                App.updateSyncBadge('cloud-ok', '雲端即時同步中');
+              }
+            }
           } catch (err) {
-            console.error('解析遠端資料失敗:', err);
+            console.error('解析遠端即時資料失敗:', err);
           }
         }
       });
 
       this.isCloudConnected = true;
-      App.updateSyncBadge('cloud-ok', '雲端即時同步中');
+      if (window.App && typeof App.updateSyncBadge === 'function') {
+        App.updateSyncBadge('cloud-ok', '雲端即時同步中');
+      }
     } catch (err) {
       console.error('Firebase 初始化失敗:', err);
       this.isCloudConnected = false;
-      App.updateSyncBadge('cloud-err', 'Firebase 連線異常');
+      if (window.App && typeof App.updateSyncBadge === 'function') {
+        App.updateSyncBadge('cloud-err', 'Firebase 連線異常(請確認 Firestore 規則)');
+      }
     }
   }
 };
