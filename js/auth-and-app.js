@@ -32,10 +32,19 @@ window.App = {
     document.getElementById('app-shell').classList.add('hidden');
   },
 
-  quickFillLogin(acc, pwd) {
-    document.getElementById('login-account').value = acc;
-    document.getElementById('login-password').value = pwd;
-    document.getElementById('login-error').classList.add('hidden');
+  /**
+   * 快速帶入帳號（僅帶入帳號，清空密碼欄並自動聚焦至密碼輸入框）
+   */
+  quickFillLogin(acc) {
+    const accEl = document.getElementById('login-account');
+    const pwdEl = document.getElementById('login-password');
+    if (accEl) accEl.value = acc;
+    if (pwdEl) {
+      pwdEl.value = '';
+      pwdEl.focus();
+    }
+    const errEl = document.getElementById('login-error');
+    if (errEl) errEl.classList.add('hidden');
   },
 
   handleLogin(e) {
@@ -121,13 +130,11 @@ window.App = {
 
   /**
    * 檢查某張表單範本是否對指定使用者可見
-   * 綜合判斷：1. 該人員是否有自訂 allowedTemplateIds 2. 該人員的 allowedTags（預設該股+其他）
    */
   canUserAccessTemplate(user, template) {
     if (!user || !template) return false;
     if (user.id === AppConfig.SUPER_ADMIN_ID || user.role === 'chief') return true;
 
-    // 若管理員有在「人員管理」為該人員勾選特定顯示表單，優先依勾選清單加上所屬標籤判定
     if (Array.isArray(user.allowedTemplateIds) && user.allowedTemplateIds.length > 0) {
       return user.allowedTemplateIds.includes(template.id);
     }
@@ -154,7 +161,6 @@ window.App = {
     const u = this.currentUser;
     if (!u) return;
 
-    // 同步最新 user 物件
     const freshUser = DB.state.users.find(item => item.id === u.id);
     if (freshUser) this.currentUser = freshUser;
 
@@ -164,7 +170,6 @@ window.App = {
     document.getElementById('current-role-badge').textContent = u.roleTitle;
     document.getElementById('sidebar-account-code').textContent = `帳號: ${u.account}`;
 
-    // 渲染左下角印章預覽
     const sealName = u.isSharedAccount ? this.activeTechMember : (u.sealText || u.name);
     document.getElementById('sidebar-seal-preview').innerHTML = this.renderSealHTML({
       name: sealName,
@@ -172,7 +177,6 @@ window.App = {
       customSignature: u.customSignature
     });
 
-    // 簽核路徑說明
     const sup = DB.state.users.find(x => x.id === u.supervisorId);
     const supChief = sup ? DB.state.users.find(x => x.id === sup.supervisorId) : null;
     let chainHtml = `<div class="text-slate-400">所屬分類：<span class="text-white font-semibold">${(u.allowedTags || []).join('、')}</span></div>`;
@@ -191,7 +195,6 @@ window.App = {
     const modules = this.getAllowedModulesForCurrentUser();
     const pendingCount = this.getPendingActionCountForCurrentUser();
 
-    // 桌機左側導覽
     const desktopNav = document.getElementById('desktop-nav-list');
     desktopNav.innerHTML = modules.map(m => {
       const isActive = this.currentModule === m.id;
@@ -212,7 +215,6 @@ window.App = {
       `;
     }).join('');
 
-    // 手機底部導覽
     const mobileNav = document.getElementById('mobile-nav-list');
     mobileNav.innerHTML = modules.map(m => {
       const isActive = this.currentModule === m.id;
@@ -247,7 +249,6 @@ window.App = {
   },
 
   switchModule(moduleId) {
-    // 安全檢查：非 209874 嚴禁進入 personnel
     if (moduleId === 'personnel' && (!this.currentUser || this.currentUser.id !== AppConfig.SUPER_ADMIN_ID)) {
       this.toast('權限不足：僅最高權限管理者鄭毓邦 (209874) 可進入人員管理！', 'error');
       return;
@@ -320,7 +321,6 @@ window.App = {
 
     let sum = 0;
     if (formula === 'COL_SUM') {
-      // 加總同欄上方所有數值列
       for (const r of template.rows) {
         if (r.id === rowObj.id) break;
         if (r.isSection) continue;
@@ -329,7 +329,6 @@ window.App = {
         if (!isNaN(num)) sum += num;
       }
     } else if (formula === 'ROW_SUM') {
-      // 加總同列左側所有數值欄
       for (const c of template.columns) {
         if (c.id === colObj.id) break;
         const rawVal = cellValues?.[rowObj.id]?.[c.id] ?? rowObj.cells?.[c.id]?.value;
@@ -490,38 +489,6 @@ window.App = {
       html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: 'mm', format: 'a4', orientation: orient }
     }).from(element).save();
-  },
-
-  openFirebaseModal() {
-    const saved = localStorage.getItem(AppConfig.FIREBASE_CFG_KEY) || '';
-    document.getElementById('firebase-config-input').value = saved;
-    document.getElementById('firebase-modal').classList.remove('hidden');
-  },
-
-  closeFirebaseModal() {
-    document.getElementById('firebase-modal').classList.add('hidden');
-  },
-
-  saveFirebaseConfigFromUI() {
-    const raw = document.getElementById('firebase-config-input').value.trim();
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed.apiKey || !parsed.projectId) throw new Error('缺少 apiKey 或 projectId');
-      localStorage.setItem(AppConfig.FIREBASE_CFG_KEY, JSON.stringify(parsed));
-      this.closeFirebaseModal();
-      DB.initFirebaseIfConfigured();
-      this.toast('Firebase 雲端設定已儲存並啟動連線！', 'success');
-    } catch (e) {
-      this.toast('JSON 格式不正確，請貼上完整的 Firebase 設定物件', 'error');
-    }
-  },
-
-  clearFirebaseConfig() {
-    localStorage.removeItem(AppConfig.FIREBASE_CFG_KEY);
-    DB.isCloudConnected = false;
-    this.updateSyncBadge('local', '本機儲存模式');
-    this.closeFirebaseModal();
-    this.toast('已切換為本機儲存模式', 'info');
   },
 
   updateSyncBadge(status, text) {
