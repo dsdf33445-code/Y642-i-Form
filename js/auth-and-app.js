@@ -1,5 +1,5 @@
 /**
- * Y642 每月定檢表系統 - 登入驗證、角色模組權限控管、電子職章與 PDF 匯出核心
+ * Y642 每月定檢表系統 - 登入驗證、角色模組權限控管、標籤色彩、電子職章與 PDF 匯出核心
  */
 window.App = {
   currentUser: null,        // 當前登入之帳號物件
@@ -48,11 +48,28 @@ window.App = {
   },
 
   /**
-   * 取得乾淨的「職位」名稱（去除括號附註，例如將「B股股長 (最高管理員)」轉為「B股股長」）
+   * 依據標籤名稱回傳專屬顏色樣式 (A股、B股、C股、D股、其他)
+   */
+  getTagBadgeClass(tag) {
+    const map = {
+      'A股': 'bg-blue-100 text-blue-800 border border-blue-300',
+      'B股': 'bg-emerald-100 text-emerald-800 border border-emerald-300',
+      'C股': 'bg-amber-100 text-amber-800 border border-amber-300',
+      'D股': 'bg-purple-100 text-purple-800 border border-purple-300',
+      '其他': 'bg-rose-100 text-rose-800 border border-rose-300'
+    };
+    return map[tag] || 'bg-slate-100 text-slate-800 border border-slate-300';
+  },
+
+  /**
+   * 取得乾淨的「職稱」名稱（去除括號附註，例如將「B股股長 (最高管理員)」轉為「B股股長」）
    */
   getCleanTitle(user) {
     if (!user) return '';
-    return String(user.roleTitle || '').replace(/\s*[\(（].*?[\)）]/g, '').trim();
+    const cleaned = String(user.roleTitle || '').replace(/\s*[\(（].*?[\)）]/g, '').trim();
+    if (cleaned) return cleaned;
+    const roleMap = { tech: '技術員', leader: '股長', engineer: '工程師', chief: '課長', admin: '管理員' };
+    return roleMap[user.role] || '人員';
   },
 
   /**
@@ -118,7 +135,7 @@ window.App = {
         { id: 'fill', title: fillTitle, icon: fillIcon },
         { id: 'completed', title: '已完成表單', icon: 'fa-box-archive' }
       ];
-    } else if (u.role === 'leader' || u.role === 'engineer') {
+    } else if (u.role === 'leader' || u.role === 'engineer' || u.role === 'admin') {
       modules = [
         { id: 'fill', title: fillTitle, icon: fillIcon },
         { id: 'builder', title: '設計表單', icon: 'fa-table-cells' },
@@ -132,7 +149,7 @@ window.App = {
       ];
     }
 
-    if (u.id === AppConfig.SUPER_ADMIN_ID) {
+    if (u.id === AppConfig.SUPER_ADMIN_ID || u.role === 'admin') {
       modules.push({ id: 'personnel', title: '人員管理', icon: 'fa-users-gear' });
     }
 
@@ -144,7 +161,7 @@ window.App = {
    */
   canUserAccessTemplate(user, template) {
     if (!user || !template) return false;
-    if (user.id === AppConfig.SUPER_ADMIN_ID || user.role === 'chief') return true;
+    if (user.id === AppConfig.SUPER_ADMIN_ID || user.role === 'admin' || user.role === 'chief') return true;
 
     if (Array.isArray(user.allowedTemplateIds) && user.allowedTemplateIds.length > 0) {
       return user.allowedTemplateIds.includes(template.id);
@@ -199,7 +216,7 @@ window.App = {
     const supChief = sup ? DB.state.users.find(x => x.id === sup.supervisorId) : null;
     let chainHtml = `<div class="text-slate-400">所屬分類：<span class="text-white font-semibold">${(u.allowedTags || []).join('、')}</span></div>`;
     if (sup) {
-      chainHtml += `<div class="mt-0.5 text-slate-400">直屬陳核：<span class="text-amber-300 font-semibold">${this.getCleanTitle(sup)} ${sup.name}</span></div>`;
+      chainHtml += `<div class="mt-0.5 text-slate-400">下一簽核人：<span class="text-amber-300 font-semibold">${this.getCleanTitle(sup)} ${sup.name}</span></div>`;
     }
     if (supChief) {
       chainHtml += `<div class="mt-0.5 text-slate-400">最終決行：<span class="text-emerald-300 font-semibold">${this.getCleanTitle(supChief)} ${supChief.name}</span></div>`;
@@ -258,7 +275,7 @@ window.App = {
     return DB.state.records.filter(r => {
       if (r.stage === 'completed') return false;
       if (u.role === 'chief') return r.stage === 'pending_chief' && r.currentAssigneeId === u.id;
-      if (u.role === 'leader' || u.role === 'engineer') {
+      if (u.role === 'leader' || u.role === 'engineer' || u.role === 'admin') {
         return (r.stage === 'pending_leader' && r.currentAssigneeId === u.id) ||
                (r.stage === 'draft_tech' && r.fillerAccountId === u.id);
       }
@@ -267,8 +284,8 @@ window.App = {
   },
 
   switchModule(moduleId) {
-    if (moduleId === 'personnel' && (!this.currentUser || this.currentUser.id !== AppConfig.SUPER_ADMIN_ID)) {
-      this.toast('權限不足：僅最高權限管理者鄭毓邦 (209874) 可進入人員管理！', 'error');
+    if (moduleId === 'personnel' && (!this.currentUser || (this.currentUser.id !== AppConfig.SUPER_ADMIN_ID && this.currentUser.role !== 'admin'))) {
+      this.toast('權限不足：僅管理員可進入人員管理！', 'error');
       return;
     }
 
@@ -510,7 +527,6 @@ window.App = {
       pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
     }).from(element).toPdf().get('pdf').then((pdf) => {
       const totalPages = pdf.internal.getNumberOfPages();
-      // 若單頁高度內因邊界誤差產生第2頁空白頁，自動刪除多餘空白頁
       if (totalPages > 1 && element.scrollHeight < 1020) {
         pdf.deletePage(totalPages);
       }

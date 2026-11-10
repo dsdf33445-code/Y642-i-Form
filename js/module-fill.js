@@ -1,6 +1,7 @@
 /**
  * 模組 1：填寫表單 / 待簽核表單
  * - 依當前使用者顯示可填寫的表單（預設僅能填寫該股及其他表單，或依人員管理設定之顯示表單）
+ * - 不同標籤以不同顏色區分
  * - 支援共用技術員帳號 (Y642A~D) 切換實際填表人姓名
  * - 逐級陳核：各股技術員 > 各股股長 > 課長，洪浚豪 > 蘇哲彬 > 課長
  */
@@ -161,7 +162,7 @@ window.ModuleFill = {
   renderActiveRecordWorkspace(rec, tpl) {
     const u = App.currentUser;
     const isMyTurn = rec.currentAssigneeId === u.id;
-    const canEditCells = (rec.stage === 'draft_tech' && (rec.fillerAccountId === u.id || u.role === 'leader' || u.role === 'engineer')) ||
+    const canEditCells = (rec.stage === 'draft_tech' && (rec.fillerAccountId === u.id || u.role === 'leader' || u.role === 'engineer' || u.role === 'admin')) ||
                          (rec.stage === 'pending_leader' && rec.currentAssigneeId === u.id);
 
     const fillerAcc = DB.state.users.find(x => x.id === rec.fillerAccountId);
@@ -173,7 +174,7 @@ window.ModuleFill = {
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
         <div class="flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-100">
           <div class="flex items-center gap-2">
-            <span class="px-2.5 py-1 rounded-lg bg-blue-100 text-blue-800 text-xs font-black">${rec.tag}</span>
+            <span class="px-2.5 py-1 rounded-lg text-xs font-black ${App.getTagBadgeClass(rec.tag)}">${rec.tag}</span>
             <h2 class="text-sm sm:text-base font-bold text-slate-900">${tpl.name}</h2>
             <span class="text-xs font-mono text-slate-400">(${rec.month})</span>
           </div>
@@ -399,7 +400,7 @@ window.ModuleFill = {
 
   renderActionButtons(rec, isMyTurn) {
     const u = App.currentUser;
-    if (!isMyTurn && u.id !== AppConfig.SUPER_ADMIN_ID) {
+    if (!isMyTurn && u.id !== AppConfig.SUPER_ADMIN_ID && u.role !== 'admin') {
       return '';
     }
 

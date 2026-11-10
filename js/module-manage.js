@@ -1,7 +1,8 @@
 /**
  * 模組 3：表單管理
  * - 依當前使用者顯示其管理的表單範本與進行中紀錄
- * - 支援依標籤 (A股、B股、C股、D股、其他) 篩選、快速修改標籤、進入設計器編輯、複製或刪除表單
+ * - 不同標籤 (A股、B股、C股、D股、其他) 以不同顏色區分
+ * - 支援依標籤篩選、快速修改標籤、進入設計器編輯、複製或刪除表單
  */
 window.ModuleManage = {
   selectedTag: 'ALL',
@@ -27,7 +28,7 @@ window.ModuleManage = {
               表單管理（依您的權限顯示管理之定檢表）
             </h2>
             <p class="text-xs text-slate-500 mt-0.5">
-              目前登入身分：<strong>${u.name} (${u.roleTitle})</strong>｜可管理分類：<strong>${(u.allowedTags || []).join('、')}</strong>
+              目前登入身分：<strong>${App.getFormattedUserHeaderTitle(u)}</strong>｜可管理分類：<strong>${(u.allowedTags || []).join('、')}</strong>
             </p>
           </div>
 
@@ -38,7 +39,7 @@ window.ModuleManage = {
             </button>
             ${AppConfig.TAGS.map(tag => `
               <button onclick="ModuleManage.setTagFilter('${tag}')"
-                class="px-3 py-1.5 rounded-xl text-xs font-bold transition ${this.selectedTag === tag ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">
+                class="px-3 py-1.5 rounded-xl text-xs font-bold transition ${this.selectedTag === tag ? 'ring-2 ring-slate-900 ' + App.getTagBadgeClass(tag) : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">
                 ${tag}
               </button>
             `).join('')}
@@ -53,7 +54,7 @@ window.ModuleManage = {
               <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm hover:shadow-md transition flex flex-col justify-between gap-3">
                 <div class="space-y-2">
                   <div class="flex items-center justify-between gap-2">
-                    <span class="px-2.5 py-0.5 rounded-lg bg-blue-100 text-blue-800 text-xs font-extrabold">${tpl.tag || '其他'}</span>
+                    <span class="px-2.5 py-0.5 rounded-lg text-xs font-extrabold ${App.getTagBadgeClass(tpl.tag || '其他')}">${tpl.tag || '其他'}</span>
                     <span class="text-xs font-mono text-slate-400">編號：${tpl.code || '-'}</span>
                   </div>
                   <h3 class="text-sm sm:text-base font-bold text-slate-900">${tpl.name}</h3>

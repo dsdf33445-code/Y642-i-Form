@@ -1,6 +1,7 @@
 /**
  * 模組 4：已完成表單歸檔
- * - 標題改為「已完成表單歸檔」，移除副標題說明
+ * - 標題為「已完成表單歸檔」
+ * - 不同標籤以不同顏色區分
  * - 加入年份下拉選單與年度分頁（每頁只顯示當年度月份）
  * - 每月歸檔標題列支援點擊展開 / 收起
  * - 歸檔表單每列只顯示：標籤、表單名稱、點檢日（及右側檢視/匯出 PDF 按鈕）
@@ -10,29 +11,26 @@ window.ModuleCompleted = {
   selectedYear: '',
   selectedMonth: 'ALL',
   selectedTag: 'ALL',
-  collapsedMonths: {}, // 紀錄各月份展開/收起狀態：{ '2026-10': true } 代表收起
+  collapsedMonths: {},
 
   render() {
     const container = document.getElementById('view-completed');
     const u = App.currentUser;
     if (!container || !u) return;
 
-    // 1. 取得該使用者有權檢視的所有已完成表單
     const accessibleCompleted = DB.state.records.filter(r => {
       if (r.stage !== 'completed') return false;
-      if (u.role === 'chief' || u.id === AppConfig.SUPER_ADMIN_ID) return true;
+      if (u.role === 'chief' || u.id === AppConfig.SUPER_ADMIN_ID || u.role === 'admin') return true;
       const tpl = DB.state.templates.find(t => t.id === r.templateId);
       if (tpl) return App.canUserAccessTemplate(u, tpl);
       return (u.allowedTags || []).includes(r.tag);
     });
 
-    // 2. 取出所有可用年份 (由新到舊排序)，若無資料則預設今年度
     const currentYearStr = String(new Date().getFullYear());
     const yearsSet = new Set(accessibleCompleted.map(r => String(r.month || '').slice(0, 4)).filter(Boolean));
     if (yearsSet.size === 0) yearsSet.add(currentYearStr);
     const availableYears = Array.from(yearsSet).sort((a, b) => b.localeCompare(a));
 
-    // 預設選取最新年度（每頁只顯示當年度月份）
     if (!this.selectedYear || !availableYears.includes(this.selectedYear)) {
       this.selectedYear = availableYears[0];
     }
@@ -40,7 +38,6 @@ window.ModuleCompleted = {
     const currentYearIdx = availableYears.indexOf(this.selectedYear);
     const totalYearPages = availableYears.length;
 
-    // 3. 取出「當年度」底下所有可用月份 (由新到舊排序)
     const monthsInSelectedYear = Array.from(
       new Set(
         accessibleCompleted
@@ -53,7 +50,6 @@ window.ModuleCompleted = {
       this.selectedMonth = 'ALL';
     }
 
-    // 4. 依「當年度(分頁)」、月份、標籤與搜尋框關鍵字過濾
     const kw = this.searchKeyword.trim().toLowerCase();
     const filtered = accessibleCompleted.filter(r => {
       if (!String(r.month || '').startsWith(this.selectedYear)) return false;
@@ -66,7 +62,6 @@ window.ModuleCompleted = {
       return true;
     });
 
-    // 5. 依照當年度月份分組
     const groupedByMonth = {};
     filtered.forEach(r => {
       if (!groupedByMonth[r.month]) groupedByMonth[r.month] = [];
@@ -156,7 +151,7 @@ window.ModuleCompleted = {
                 ${list.map(r => `
                   <div class="px-4 py-3 hover:bg-slate-50 transition flex flex-wrap items-center justify-between gap-3">
                     <div class="flex flex-wrap items-center gap-3 min-w-0">
-                      <span class="px-2.5 py-0.5 rounded bg-blue-100 text-blue-800 text-xs font-extrabold shrink-0">${r.tag}</span>
+                      <span class="px-2.5 py-0.5 rounded-md text-xs font-extrabold shrink-0 ${App.getTagBadgeClass(r.tag)}">${r.tag}</span>
                       <span class="font-bold text-sm text-slate-900 truncate">${r.templateName}</span>
                       <span class="text-xs font-mono text-slate-500 shrink-0">
                         <i class="fa-solid fa-calendar-day mr-1 text-slate-400"></i>點檢日：${r.inspectDate}
@@ -229,7 +224,7 @@ window.ModuleCompleted = {
     const u = App.currentUser;
     const accessibleCompleted = DB.state.records.filter(r => {
       if (r.stage !== 'completed') return false;
-      if (u.role === 'chief' || u.id === AppConfig.SUPER_ADMIN_ID) return true;
+      if (u.role === 'chief' || u.id === AppConfig.SUPER_ADMIN_ID || u.role === 'admin') return true;
       const tpl = DB.state.templates.find(t => t.id === r.templateId);
       if (tpl) return App.canUserAccessTemplate(u, tpl);
       return (u.allowedTags || []).includes(r.tag);
