@@ -1,9 +1,8 @@
 /**
  * 模組 1：填寫表單 / 待簽核表單
  * - 依當前使用者顯示可填寫的表單（預設僅能填寫該股及其他表單，或依人員管理設定之顯示表單）
- * - 不同標籤以不同顏色區分
+ * - 三級簽核欄名稱改為：檢查人、股長、課長
  * - 支援共用技術員帳號 (Y642A~D) 切換實際填表人姓名
- * - 逐級陳核：各股技術員 > 各股股長 > 課長，洪浚豪 > 蘇哲彬 > 課長
  */
 window.ModuleFill = {
   filterTag: 'ALL',
@@ -68,7 +67,7 @@ window.ModuleFill = {
         <div class="flex items-center gap-2">
           ${u.isSharedAccount ? `
             <div class="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 px-2.5 py-1 rounded-xl text-xs">
-              <span class="font-bold text-emerald-800"><i class="fa-solid fa-user-check mr-1"></i>填表技術員：</span>
+              <span class="font-bold text-emerald-800"><i class="fa-solid fa-user-check mr-1"></i>檢查人：</span>
               <select onchange="ModuleFill.changeActiveTechMember(this.value)"
                 class="bg-white border border-emerald-400 rounded-lg px-2 py-0.5 font-bold text-emerald-900">
                 ${(u.members || []).map(m => `<option value="${m}" ${m === App.activeTechMember ? 'selected' : ''}>${m}</option>`).join('')}
@@ -94,14 +93,14 @@ window.ModuleFill = {
       <div id="new-record-modal" class="fixed inset-0 z-50 hidden bg-slate-900/75 flex items-center justify-center p-4">
         <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
           <div class="bg-slate-900 text-white px-5 py-3.5 flex items-center justify-between">
-            <h3 class="font-bold text-sm"><i class="fa-solid fa-file-circle-plus mr-2 text-blue-400"></i>新增每月定檢表作業</h3>
+            <h3 class="font-bold text-sm"><i class="fa-solid fa-file-circle-plus mr-2 text-blue-400"></i>新增定檢表作業</h3>
             <button onclick="ModuleFill.closeNewRecordModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
           </div>
           <div class="p-5 space-y-3.5 text-xs">
             <div>
               <label class="block font-bold text-slate-700 mb-1">選擇可填寫之定檢表單（僅顯示您所屬股別及其他表單）</label>
               <select id="new-rec-template" class="w-full border border-slate-300 rounded-xl px-3 py-2 font-bold bg-slate-50">
-                ${accessibleTemplates.map(t => `<option value="${t.id}">[${t.tag}] ${t.name} (${t.code})</option>`).join('')}
+                ${accessibleTemplates.map(t => `<option value="${t.id}">[${t.tag}｜${t.cycle || '每月'}] ${t.name} (${t.code})</option>`).join('')}
               </select>
             </div>
             <div class="grid grid-cols-2 gap-3">
@@ -128,9 +127,9 @@ window.ModuleFill = {
 
   getStageLabel(stage) {
     const map = {
-      draft_tech: '技術員填寫中',
-      pending_leader: '待股長/工程師複核',
-      pending_chief: '待課長決行簽核',
+      draft_tech: '檢查人填寫中',
+      pending_leader: '待股長簽核',
+      pending_chief: '待課長簽核',
       completed: '已核定歸檔'
     };
     return map[stage] || stage;
@@ -173,8 +172,11 @@ window.ModuleFill = {
       <!-- 三級簽核進度橫幅 -->
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
         <div class="flex flex-wrap items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-100">
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2">
             <span class="px-2.5 py-1 rounded-lg text-xs font-black ${App.getTagBadgeClass(rec.tag)}">${rec.tag}</span>
+            <span class="px-2.5 py-1 rounded-lg text-xs font-bold ${App.getCycleBadgeClass(tpl.cycle || '每月')}">
+              <i class="fa-solid fa-rotate mr-1"></i>${tpl.cycle || '每月'}
+            </span>
             <h2 class="text-sm sm:text-base font-bold text-slate-900">${tpl.name}</h2>
             <span class="text-xs font-mono text-slate-400">(${rec.month})</span>
           </div>
@@ -188,12 +190,12 @@ window.ModuleFill = {
           </div>
         </div>
 
-        <!-- 逐級陳核三階段視覺卡片 (簽章只顯示 姓名 + 年月日) -->
+        <!-- 逐級陳核三階段視覺卡片：檢查人 -> 股長 -> 課長 -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-          <!-- Stage 1: 技術員 -->
+          <!-- Stage 1: 檢查人 -->
           <div class="p-3 rounded-xl border ${rec.stage === 'draft_tech' ? 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-100' : 'border-slate-200 bg-slate-50'} flex items-center justify-between">
             <div>
-              <div class="font-bold text-slate-700">1. 點檢技術員填寫</div>
+              <div class="font-bold text-slate-800 text-sm">檢查人</div>
               <div class="text-[11px] text-slate-500 mt-0.5">
                 負責：${rec.approvals?.tech ? rec.approvals.tech.name : `${rec.fillerMemberName}`}
               </div>
@@ -204,16 +206,16 @@ window.ModuleFill = {
             </div>
           </div>
 
-          <!-- Stage 2: 股長 / 工程師 (蘇哲彬) -->
+          <!-- Stage 2: 股長 -->
           <div class="p-3 rounded-xl border ${rec.stage === 'pending_leader' ? 'border-amber-500 bg-amber-50/50 ring-2 ring-amber-100' : 'border-slate-200 bg-slate-50'} flex items-center justify-between">
             <div>
-              <div class="font-bold text-slate-700">2. 股長 / 工程師複核</div>
+              <div class="font-bold text-slate-800 text-sm">股長</div>
               <div class="text-[11px] text-slate-500 mt-0.5">
                 負責：${rec.approvals?.leader ? rec.approvals.leader.name : (leaderUser ? `${leaderUser.name}` : '各股股長')}
               </div>
               ${rec.approvals?.leader
-                ? `<div class="text-[10px] text-emerald-600 font-mono mt-0.5">✓ 已複核 ${rec.approvals.leader.time.slice(0, 10)}</div>`
-                : (rec.stage === 'pending_leader' ? '<div class="text-[10px] text-amber-600 font-bold mt-0.5">● 待複核簽章</div>' : '<div class="text-[10px] text-slate-400 mt-0.5">等待上一級陳核</div>')}
+                ? `<div class="text-[10px] text-emerald-600 font-mono mt-0.5">✓ 已簽核 ${rec.approvals.leader.time.slice(0, 10)}</div>`
+                : (rec.stage === 'pending_leader' ? '<div class="text-[10px] text-amber-600 font-bold mt-0.5">● 待股長簽章</div>' : '<div class="text-[10px] text-slate-400 mt-0.5">等待檢查人陳核</div>')}
             </div>
             <div>
               ${rec.approvals?.leader ? App.renderSealHTML({ name: rec.approvals.leader.name, time: rec.approvals.leader.time }) : ''}
@@ -223,13 +225,13 @@ window.ModuleFill = {
           <!-- Stage 3: 課長 -->
           <div class="p-3 rounded-xl border ${rec.stage === 'pending_chief' ? 'border-purple-500 bg-purple-50/50 ring-2 ring-purple-100' : 'border-slate-200 bg-slate-50'} flex items-center justify-between">
             <div>
-              <div class="font-bold text-slate-700">3. 課長決行核定</div>
+              <div class="font-bold text-slate-800 text-sm">課長</div>
               <div class="text-[11px] text-slate-500 mt-0.5">
                 負責：${chiefUser ? `${chiefUser.name}` : '李宗霖'}
               </div>
               ${rec.approvals?.chief
                 ? `<div class="text-[10px] text-emerald-600 font-mono mt-0.5">✓ 已核定 ${rec.approvals.chief.time.slice(0, 10)}</div>`
-                : (rec.stage === 'pending_chief' ? '<div class="text-[10px] text-purple-600 font-bold mt-0.5">● 待課長決行</div>' : '<div class="text-[10px] text-slate-400 mt-0.5">等待股長/工程師陳核</div>')}
+                : (rec.stage === 'pending_chief' ? '<div class="text-[10px] text-purple-600 font-bold mt-0.5">● 待課長簽章</div>' : '<div class="text-[10px] text-slate-400 mt-0.5">等待股長陳核</div>')}
             </div>
             <div>
               ${rec.approvals?.chief ? App.renderSealHTML({ name: rec.approvals.chief.name, time: rec.approvals.chief.time }) : ''}
@@ -407,12 +409,12 @@ window.ModuleFill = {
     if (rec.stage === 'draft_tech') {
       const fillerAcc = DB.state.users.find(x => x.id === rec.fillerAccountId) || u;
       const nextSup = DB.state.users.find(x => x.id === fillerAcc.supervisorId);
-      const nextLabel = nextSup ? `${App.getCleanTitle(nextSup)} ${nextSup.name}` : '下一層級主管';
+      const nextLabel = nextSup ? `${App.getCleanTitle(nextSup)} ${nextSup.name}` : '股長';
       return `
         <button onclick="ModuleFill.submitToNextStage('${rec.id}')"
           class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md flex items-center gap-2 transition">
           <i class="fa-solid fa-paper-plane"></i>
-          蓋章並陳核給：${nextLabel}
+          檢查人蓋章並陳核給：${nextLabel}
         </button>
       `;
     }
@@ -422,12 +424,12 @@ window.ModuleFill = {
       return `
         <button onclick="ModuleFill.rejectToPrevious('${rec.id}')"
           class="px-3.5 py-2 rounded-xl border border-red-300 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold">
-          <i class="fa-solid fa-rotate-left mr-1"></i>退回技術員修正
+          <i class="fa-solid fa-rotate-left mr-1"></i>退回檢查人修正
         </button>
         <button onclick="ModuleFill.submitToNextStage('${rec.id}')"
           class="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-md flex items-center gap-2">
           <i class="fa-solid fa-stamp"></i>
-          股長/工程師蓋章並陳核課長 (${chief ? chief.name : '李宗霖'})
+          股長蓋章並陳核課長 (${chief ? chief.name : '李宗霖'})
         </button>
       `;
     }
@@ -436,12 +438,12 @@ window.ModuleFill = {
       return `
         <button onclick="ModuleFill.rejectToPrevious('${rec.id}')"
           class="px-3.5 py-2 rounded-xl border border-red-300 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold">
-          <i class="fa-solid fa-rotate-left mr-1"></i>退回上一級
+          <i class="fa-solid fa-rotate-left mr-1"></i>退回股長
         </button>
         <button onclick="ModuleFill.submitToNextStage('${rec.id}')"
           class="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold shadow-md flex items-center gap-2">
           <i class="fa-solid fa-file-circle-check"></i>
-          課長決行核定（歸檔至已完成表單）
+          課長蓋章核定（歸檔至已完成表單）
         </button>
       `;
     }
@@ -471,7 +473,7 @@ window.ModuleFill = {
     }
     App.renderHeaderAndSidebarUser();
     this.render();
-    App.toast(`已切換填表人為：${App.getFormattedUserHeaderTitle(App.currentUser)}`, 'info');
+    App.toast(`已切換檢查人為：${App.getFormattedUserHeaderTitle(App.currentUser)}`, 'info');
   },
 
   updateCellValue(recId, rowId, colId, val) {
@@ -529,7 +531,7 @@ window.ModuleFill = {
       rec.approvals.tech = {
         accountId: u.id,
         name: signerName,
-        roleTitle: App.getCleanTitle(u),
+        roleTitle: '檢查人',
         time: nowStr,
         comment: '點檢完成陳核'
       };
@@ -551,13 +553,13 @@ window.ModuleFill = {
       rec.approvals.leader = {
         accountId: u.id,
         name: u.name,
-        roleTitle: App.getCleanTitle(u),
+        roleTitle: '股長',
         time: nowStr,
         comment: '複核通過呈課長'
       };
       rec.stage = 'pending_chief';
       rec.currentAssigneeId = chiefId;
-      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: `複核簽章通過，陳核給 ${this.getUserDisplayName(chiefId)}` });
+      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: `股長簽章通過，陳核給 ${this.getUserDisplayName(chiefId)}` });
 
       DB.save();
       this.render();
@@ -569,7 +571,7 @@ window.ModuleFill = {
       rec.approvals.chief = {
         accountId: u.id,
         name: u.name,
-        roleTitle: App.getCleanTitle(u),
+        roleTitle: '課長',
         time: nowStr,
         comment: '決行核定'
       };
@@ -595,13 +597,13 @@ window.ModuleFill = {
       rec.approvals.chief = null;
       rec.stage = 'pending_leader';
       rec.currentAssigneeId = prevLeaderId;
-      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: '退回股長/工程師重新確認' });
+      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: '退回股長重新確認' });
     } else if (rec.stage === 'pending_leader') {
       rec.approvals.tech = null;
       rec.approvals.leader = null;
       rec.stage = 'draft_tech';
       rec.currentAssigneeId = rec.fillerAccountId;
-      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: '退回技術員重新填寫' });
+      rec.logs.push({ time: nowStr, actor: `${App.getCleanTitle(u)} ${u.name}`, action: '退回檢查人重新填寫' });
     }
 
     DB.save();

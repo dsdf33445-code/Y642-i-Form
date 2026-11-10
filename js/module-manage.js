@@ -1,8 +1,8 @@
 /**
  * 模組 3：表單管理
- * - 依當前使用者顯示其管理的表單範本與進行中紀錄
- * - 不同標籤 (A股、B股、C股、D股、其他) 以不同顏色區分
- * - 支援依標籤篩選、快速修改標籤、進入設計器編輯、複製或刪除表單
+ * - 標題改為「表單管理」
+ * - 不同標籤 (A股、B股、C股、D股、其他) 與填寫週期 (每月、每季、半年、每年) 以專屬色彩區分
+ * - 支援依標籤篩選、快速修改標籤與填寫週期、進入設計器編輯、複製或刪除表單
  */
 window.ModuleManage = {
   selectedTag: 'ALL',
@@ -25,11 +25,8 @@ window.ModuleManage = {
           <div>
             <h2 class="text-base font-extrabold text-slate-900 flex items-center gap-2">
               <i class="fa-solid fa-folder-tree text-blue-600"></i>
-              表單管理（依您的權限顯示管理之定檢表）
+              表單管理
             </h2>
-            <p class="text-xs text-slate-500 mt-0.5">
-              目前登入身分：<strong>${App.getFormattedUserHeaderTitle(u)}</strong>｜可管理分類：<strong>${(u.allowedTags || []).join('、')}</strong>
-            </p>
           </div>
 
           <div class="flex flex-wrap items-center gap-1.5">
@@ -50,11 +47,17 @@ window.ModuleManage = {
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           ${managedTemplates.map(tpl => {
             const recCount = DB.state.records.filter(r => r.templateId === tpl.id).length;
+            const cycle = tpl.cycle || '每月';
             return `
               <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm hover:shadow-md transition flex flex-col justify-between gap-3">
                 <div class="space-y-2">
                   <div class="flex items-center justify-between gap-2">
-                    <span class="px-2.5 py-0.5 rounded-lg text-xs font-extrabold ${App.getTagBadgeClass(tpl.tag || '其他')}">${tpl.tag || '其他'}</span>
+                    <div class="flex items-center gap-1.5">
+                      <span class="px-2.5 py-0.5 rounded-lg text-xs font-extrabold ${App.getTagBadgeClass(tpl.tag || '其他')}">${tpl.tag || '其他'}</span>
+                      <span class="px-2.5 py-0.5 rounded-lg text-xs font-bold ${App.getCycleBadgeClass(cycle)}">
+                        <i class="fa-solid fa-rotate mr-1"></i>${cycle}
+                      </span>
+                    </div>
                     <span class="text-xs font-mono text-slate-400">編號：${tpl.code || '-'}</span>
                   </div>
                   <h3 class="text-sm sm:text-base font-bold text-slate-900">${tpl.name}</h3>
@@ -65,12 +68,22 @@ window.ModuleManage = {
                 </div>
 
                 <div class="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <div class="flex items-center gap-1.5">
-                    <span class="text-slate-500 font-semibold">標籤：</span>
-                    <select onchange="ModuleManage.changeTemplateTag('${tpl.id}', this.value)"
-                      class="border border-slate-300 rounded-lg px-2 py-1 font-bold bg-slate-50">
-                      ${AppConfig.TAGS.map(t => `<option value="${t}" ${tpl.tag === t ? 'selected' : ''}>${t}</option>`).join('')}
-                    </select>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <div class="flex items-center gap-1">
+                      <span class="text-slate-500 font-semibold">標籤：</span>
+                      <select onchange="ModuleManage.changeTemplateTag('${tpl.id}', this.value)"
+                        class="border border-slate-300 rounded-lg px-2 py-1 font-bold bg-slate-50">
+                        ${AppConfig.TAGS.map(t => `<option value="${t}" ${tpl.tag === t ? 'selected' : ''}>${t}</option>`).join('')}
+                      </select>
+                    </div>
+
+                    <div class="flex items-center gap-1">
+                      <span class="text-slate-500 font-semibold">週期：</span>
+                      <select onchange="ModuleManage.changeTemplateCycle('${tpl.id}', this.value)"
+                        class="border border-slate-300 rounded-lg px-2 py-1 font-bold bg-slate-50">
+                        ${(App.CYCLES || ['每月', '每季', '半年', '每年']).map(cy => `<option value="${cy}" ${cycle === cy ? 'selected' : ''}>${cy}</option>`).join('')}
+                      </select>
+                    </div>
                   </div>
 
                   <div class="flex items-center gap-1.5">
@@ -111,6 +124,15 @@ window.ModuleManage = {
     DB.save();
     this.render();
     App.toast(`已將「${tpl.name}」分類標籤改為【${newTag}】`, 'success');
+  },
+
+  changeTemplateCycle(tplId, newCycle) {
+    const tpl = DB.state.templates.find(t => t.id === tplId);
+    if (!tpl) return;
+    tpl.cycle = newCycle;
+    DB.save();
+    this.render();
+    App.toast(`已將「${tpl.name}」填寫週期改為【${newCycle}】`, 'success');
   },
 
   editInBuilder(tplId) {

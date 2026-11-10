@@ -8,6 +8,7 @@ window.App = {
   activeRecordId: null,     // 當前於填寫模組開啟的紀錄 ID
   activeTemplateId: null,   // 當前於設計表單開啟的範本 ID
   pdfTargetRecordId: null,  // 當前預覽 PDF 的紀錄 ID
+  CYCLES: ['每月', '每季', '半年', '每年'],
 
   init() {
     DB.init();
@@ -59,6 +60,19 @@ window.App = {
       '其他': 'bg-rose-100 text-rose-800 border border-rose-300'
     };
     return map[tag] || 'bg-slate-100 text-slate-800 border border-slate-300';
+  },
+
+  /**
+   * 依據填寫週期回傳顏色樣式 (每月、每季、半年、每年)
+   */
+  getCycleBadgeClass(cycle) {
+    const map = {
+      '每月': 'bg-sky-50 text-sky-700 border border-sky-200',
+      '每季': 'bg-indigo-50 text-indigo-700 border border-indigo-200',
+      '半年': 'bg-amber-50 text-amber-700 border border-amber-200',
+      '每年': 'bg-fuchsia-50 text-fuchsia-700 border border-fuchsia-200'
+    };
+    return map[cycle] || 'bg-sky-50 text-sky-700 border border-sky-200';
   },
 
   /**
@@ -138,7 +152,7 @@ window.App = {
     } else if (u.role === 'leader' || u.role === 'engineer' || u.role === 'admin') {
       modules = [
         { id: 'fill', title: fillTitle, icon: fillIcon },
-        { id: 'builder', title: '設計表單', icon: 'fa-table-cells' },
+        { id: 'builder', title: '設計表單', icon: 'fa-file-excel' },
         { id: 'manage', title: '表單管理', icon: 'fa-folder-tree' },
         { id: 'completed', title: '已完成表單', icon: 'fa-box-archive' }
       ];
@@ -192,7 +206,6 @@ window.App = {
     const freshUser = DB.state.users.find(item => item.id === u.id);
     if (freshUser) this.currentUser = freshUser;
 
-    // 右上角只顯示「職位 + 姓名」（例：課長 李宗霖，B股股長 鄭毓邦，B股技術員 吳宗穎）
     const headerDisplayEl = document.getElementById('current-user-display');
     if (headerDisplayEl) {
       headerDisplayEl.textContent = this.getFormattedUserHeaderTitle(this.currentUser);
@@ -203,7 +216,6 @@ window.App = {
       accCodeEl.textContent = `帳號: ${u.account}`;
     }
 
-    // 左下角職章預覽：只顯示 姓名 + 日期(年月日)
     const sealName = u.isSharedAccount ? this.activeTechMember : (u.sealText || u.name);
     const todayStr = new Date().toISOString().slice(0, 10);
     document.getElementById('sidebar-seal-preview').innerHTML = this.renderSealHTML({
@@ -465,7 +477,7 @@ window.App = {
     container.innerHTML = `
       <div class="border-b-2 border-slate-900 pb-2.5 mb-3 flex items-end justify-between">
         <div>
-          <div class="text-xs font-bold text-slate-600">${tpl.department || 'Y642 電力維護課'}｜分類標籤：【${rec.tag}】</div>
+          <div class="text-xs font-bold text-slate-600">${tpl.department || 'Y642 電力維護課'}｜分類標籤：【${rec.tag}】｜週期：【${tpl.cycle || '每月'}】</div>
           <h2 class="text-lg font-black tracking-wide mt-0.5">${tpl.name}</h2>
         </div>
         <div class="text-right text-xs space-y-0.5 font-mono">
@@ -493,9 +505,9 @@ window.App = {
       <table class="pdf-table">
         <thead>
           <tr>
-            <th class="w-1/3">第一級：點檢技術員</th>
-            <th class="w-1/3">第二級：股長 / 工程師複核</th>
-            <th class="w-1/3">第三級：課長決行核定</th>
+            <th class="w-1/3">檢查人</th>
+            <th class="w-1/3">股長</th>
+            <th class="w-1/3">課長</th>
           </tr>
         </thead>
         <tbody>
