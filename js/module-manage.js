@@ -1,8 +1,7 @@
 /**
  * 模組 3：表單管理
- * - 標題改為「表單管理」
- * - 不同標籤 (A股、B股、C股、D股、其他) 與填寫週期 (每月、每季、半年、每年) 以專屬色彩區分
- * - 支援依標籤篩選、快速修改標籤與填寫週期、進入設計器編輯、複製或刪除表單
+ * - 標題為「表單管理」
+ * - 刪除表單範本時套用美化版確認彈跳視窗
  */
 window.ModuleManage = {
   selectedTag: 'ALL',
@@ -96,7 +95,7 @@ window.ModuleManage = {
                       複製
                     </button>
                     <button onclick="ModuleManage.deleteTemplate('${tpl.id}')"
-                      class="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold">
+                      class="px-2.5 py-1.5 rounded-xl bg-red-50 hover:bg-red-600 text-red-600 hover:text-white border border-red-200 font-bold transition">
                       <i class="fa-solid fa-trash-can"></i> 刪除
                     </button>
                   </div>
@@ -160,12 +159,18 @@ window.ModuleManage = {
     }
     const tpl = DB.state.templates.find(t => t.id === tplId);
     if (!tpl) return;
-    if (!confirm(`確定要刪除「${tpl.name}」及其關聯的未結案草稿嗎？`)) return;
 
-    DB.state.templates = DB.state.templates.filter(t => t.id !== tplId);
-    DB.state.records = DB.state.records.filter(r => r.templateId !== tplId || r.stage === 'completed');
-    DB.save();
-    this.render();
-    App.toast('已刪除表單範本！', 'info');
+    App.openConfirmModal({
+      title: '刪除定檢表範本',
+      message: `確定要刪除「<strong>[${tpl.tag}] ${tpl.name}</strong>」表單範本及其未結案草稿嗎？`,
+      confirmText: '確認刪除範本',
+      onConfirm: () => {
+        DB.state.templates = DB.state.templates.filter(t => t.id !== tplId);
+        DB.state.records = DB.state.records.filter(r => r.templateId !== tplId || r.stage === 'completed');
+        DB.save();
+        this.render();
+        App.toast(`已刪除表單範本：${tpl.name}`, 'info');
+      }
+    });
   }
 };

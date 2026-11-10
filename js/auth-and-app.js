@@ -1,5 +1,5 @@
 /**
- * Y642 每月定檢表系統 - 登入驗證、角色模組權限控管、二維合併儲存格引擎、電子職章與 PDF 匯出核心
+ * Y642 每月定檢表系統 - 登入驗證、角色模組權限控管、二維合併儲存格引擎、美化確認視窗、電子職章與 PDF 匯出核心
  */
 window.App = {
   currentUser: null,        // 當前登入之帳號物件
@@ -8,6 +8,7 @@ window.App = {
   activeRecordId: null,     // 當前於填寫模組開啟的紀錄 ID
   activeTemplateId: null,   // 當前於設計表單開啟的範本 ID
   pdfTargetRecordId: null,  // 當前預覽 PDF 的紀錄 ID
+  confirmCallback: null,    // 美化確認視窗回呼函式
   CYCLES: ['每月', '每季', '半年', '每年'],
 
   init() {
@@ -46,6 +47,33 @@ window.App = {
     }
     const errEl = document.getElementById('login-error');
     if (errEl) errEl.classList.add('hidden');
+  },
+
+  /**
+   * 開啟全域美化版刪除確認彈跳視窗
+   */
+  openConfirmModal({ title = '確認刪除', message = '確定要執行刪除嗎？', confirmText = '確認刪除', onConfirm = null }) {
+    const modal = document.getElementById('confirm-modal');
+    if (!modal) return;
+    document.getElementById('confirm-modal-title').textContent = title;
+    document.getElementById('confirm-modal-message').innerHTML = message;
+    document.getElementById('confirm-modal-ok-text').textContent = confirmText;
+    this.confirmCallback = onConfirm;
+
+    const okBtn = document.getElementById('confirm-modal-ok-btn');
+    okBtn.onclick = () => {
+      const cb = this.confirmCallback;
+      this.closeConfirmModal();
+      if (typeof cb === 'function') cb();
+    };
+
+    modal.classList.remove('hidden');
+  },
+
+  closeConfirmModal() {
+    const modal = document.getElementById('confirm-modal');
+    if (modal) modal.classList.add('hidden');
+    this.confirmCallback = null;
   },
 
   /**
@@ -360,7 +388,6 @@ window.App = {
 
   /**
    * 二維合併儲存格計算引擎（同時支援上下跨列合併 rowspan 與左右跨欄合併 colspan）
-   * 回傳結構：gridMap[rIdx][cIdx] = { skip: Boolean, rowspan: Number, colspan: Number, masterR: Number, masterC: Number }
    */
   computeMergedGridMap(tpl) {
     const rowCount = (tpl.rows || []).length;
@@ -380,7 +407,6 @@ window.App = {
         const cell = (row.cells && row.cells[col.id]) || {};
 
         let colspan = Math.max(1, Math.min(parseInt(cell.colspan, 10) || 1, colCount - cIdx));
-        // 避免跨欄覆蓋到已經被上方跨列佔用的格子
         for (let dc = 1; dc < colspan; dc++) {
           if (gridMap[rIdx][cIdx + dc].skip) {
             colspan = dc;
@@ -388,7 +414,6 @@ window.App = {
           }
         }
 
-        // 計算最大可用跨列數（遇到大分類列 isSection 或表格底端即停止）
         let maxAvailRows = 1;
         for (let dr = 1; rIdx + dr < rowCount; dr++) {
           if (tpl.rows[rIdx + dr].isSection) break;
@@ -416,7 +441,7 @@ window.App = {
   },
 
   /**
-   * 取得單一儲存格的最終顯示樣式（整合整欄設定與單格設定：靠左/置中/靠右、字型大小、粗體、斜體、背景色、文字色）
+   * 取得單一儲存格的最終顯示樣式
    */
   getEffectiveCellStyle(colObj, cellObj) {
     const eff = Object.assign({}, colObj, (cellObj && cellObj.override) || {});
@@ -480,10 +505,7 @@ window.App = {
   },
 
   /**
-   * 渲染 A4 預覽與匯出內容：
-   * 1. 不顯示「Y642 電力維護課｜分類標籤｜週期」
-   * 2. 完整支援上下合併 (rowspan)、左右合併 (colspan)、靠左/置中/靠右對齊、字型大小
-   * 3. 簽核格自動移至 A4 最下方，並維持標準 A4 大小
+   * 渲染 A4 預覽與匯出內容
    */
   refreshPdfModal() {
     const rec = DB.state.records.find(r => r.id === this.pdfTargetRecordId);
@@ -579,7 +601,7 @@ window.App = {
         <table class="pdf-table mb-3">
           <thead>
             <tr>
-              ${tpl.columns.map(c => `<th style="width:${c.width || 100}px; font-size:${c.fontSize || 12}px;">${c.title}</th>`).join('')}
+              ${tpl.columns.map(c => `<th style="width:${c.width || 100}px; font-size:${c.fontSize || 12}px; text-align:${c.headerAlign || 'center'};">${c.title}</th>`).join('')}
             </tr>
           </thead>
           <tbody>
@@ -615,7 +637,7 @@ window.App = {
   },
 
   /**
-   * 匯出並下載 PDF（維持標準 A4 大小且簽核格置底，不產生多餘空白頁）
+   * 匯出並下載 PDF
    */
   downloadPdfFile() {
     const rec = DB.state.records.find(r => r.id === this.pdfTargetRecordId);

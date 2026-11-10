@@ -1,6 +1,6 @@
 /**
  * 模組 1：填寫表單 / 待簽核表單
- * - 依當前使用者顯示可填寫的表單（預設僅能填寫該股及其他表單，或依人員管理設定之顯示表單）
+ * - 加入「刪除目前表單」按鈕（搭配美化版刪除確認視窗）
  * - 完整支援設計表單設定之「上下合併 (rowspan)」、「左右合併 (colspan)」、「靠左/置中/靠右對齊」與「字型大小」
  * - 三級簽核欄名稱：檢查人、股長、課長
  */
@@ -33,7 +33,7 @@ window.ModuleFill = {
     const currentTpl = currentRec ? DB.state.templates.find(t => t.id === currentRec.templateId) : null;
 
     container.innerHTML = `
-      <!-- 頂部工具列：選擇進行中定檢單 / 建立新月份定檢單 / 技術員切換 -->
+      <!-- 頂部工具列：選擇進行中定檢單 / 建立新月份定檢單 / 技術員切換 / 刪除目前表單 -->
       <div class="bg-white border-b border-slate-200 px-3 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs font-extrabold text-slate-700 flex items-center gap-1.5">
@@ -63,8 +63,8 @@ window.ModuleFill = {
           ` : ''}
         </div>
 
-        <!-- 若為共用技術員帳號 (Y642A~D)，提供填表人姓名下拉切換 -->
-        <div class="flex items-center gap-2">
+        <!-- 右側：檢查人切換、預覽匯出 PDF 與 刪除目前表單按鈕 -->
+        <div class="flex flex-wrap items-center gap-2">
           ${u.isSharedAccount ? `
             <div class="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 px-2.5 py-1 rounded-xl text-xs">
               <span class="font-bold text-emerald-800"><i class="fa-solid fa-user-check mr-1"></i>檢查人：</span>
@@ -77,8 +77,12 @@ window.ModuleFill = {
 
           ${currentRec ? `
             <button onclick="App.openPdfModal('${currentRec.id}')"
-              class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center gap-1.5">
+              class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold flex items-center gap-1.5 transition">
               <i class="fa-solid fa-file-pdf text-red-400"></i> 預覽匯出 PDF
+            </button>
+            <button onclick="ModuleFill.deleteCurrentRecord('${currentRec.id}')"
+              class="px-3 py-1.5 rounded-xl bg-red-50 hover:bg-red-600 text-red-600 hover:text-white border border-red-200 text-xs font-bold flex items-center gap-1.5 transition">
+              <i class="fa-solid fa-trash-can"></i> 刪除目前表單
             </button>
           ` : ''}
         </div>
@@ -123,6 +127,28 @@ window.ModuleFill = {
         </div>
       </div>
     `;
+  },
+
+  /**
+   * 刪除目前作業中的定檢表單紀錄（搭配美化確認視窗）
+   */
+  deleteCurrentRecord(recId) {
+    const rec = DB.state.records.find(r => r.id === recId);
+    if (!rec) return;
+
+    App.openConfirmModal({
+      title: '刪除目前填寫表單',
+      message: `確定要刪除「<strong>[${rec.tag}] ${rec.templateName} (${rec.month})</strong>」這筆定檢表單嗎？`,
+      confirmText: '確認刪除此表單',
+      onConfirm: () => {
+        DB.state.records = DB.state.records.filter(r => r.id !== recId);
+        App.activeRecordId = null;
+        DB.save();
+        this.render();
+        App.renderNavigationBars();
+        App.toast(`已刪除「${rec.templateName} (${rec.month})」表單！`, 'info');
+      }
+    });
   },
 
   getStageLabel(stage) {
@@ -190,7 +216,7 @@ window.ModuleFill = {
           </div>
         </div>
 
-        <!-- 逐級陳核三階段視覺卡片：檢查人 -> 股長 -> 課長 -->
+        <!-- 逐級陳核三階段視覺卡片：檢查人 ➔ 股長 ➔ 課長 -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
           <!-- Stage 1: 檢查人 -->
           <div class="p-3 rounded-xl border ${rec.stage === 'draft_tech' ? 'border-blue-500 bg-blue-50/50 ring-2 ring-blue-100' : 'border-slate-200 bg-slate-50'} flex items-center justify-between">
@@ -246,7 +272,7 @@ window.ModuleFill = {
           <table class="sheet-grid">
             <thead>
               <tr>
-                ${tpl.columns.map(c => `<th class="col-header" style="width:${c.width || 110}px; font-size:${c.fontSize || 12}px;">${c.title}</th>`).join('')}
+                ${tpl.columns.map(c => `<th class="col-header" style="width:${c.width || 110}px; font-size:${c.fontSize || 12}px; text-align:${c.headerAlign || 'center'};">${c.title}</th>`).join('')}
               </tr>
             </thead>
             <tbody>

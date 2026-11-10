@@ -1,9 +1,6 @@
 /**
  * 模組 5：人員權限管理
- * - 表頭置中，欄位改為：帳密、人員、職稱（刪除所屬顯示）、直屬陳核對象、可顯示的表單範圍（刪除依標籤自動顯示）、職章預覽、操作（編輯/刪除圖示+刪除確認視窗）
- * - 不同標籤以不同顏色區分
- * - 編輯視窗：刪除職稱顯示文字欄位；改為登入帳號、姓名、職位(技術員/股長/工程師/課長/管理員)、下一簽核人(鄭毓邦 (B股股長))
- * - 新增人員帳號時，點擊「建立」按鈕才會寫入建立，點擊取消不會新增
+ * - 刪除人員時套用美化版確認彈跳視窗
  */
 window.ModulePersonnel = {
   editingUserId: null,
@@ -241,9 +238,6 @@ window.ModulePersonnel = {
     `;
   },
 
-  /**
-   * 依據職位 (role) 與勾選之股別標籤自動推導乾淨的職稱 (roleTitle)
-   */
   deriveRoleTitle(role, checkedTags, existingUser) {
     const mainShiftTag = (checkedTags || []).find(t => ['A股', 'B股', 'C股', 'D股'].includes(t));
     if (role === 'chief') return '課長';
@@ -301,14 +295,17 @@ window.ModulePersonnel = {
     const target = DB.state.users.find(u => u.id === userId);
     if (!target) return;
 
-    if (!confirm(`確定要刪除人員「${target.name} (${target.account})」嗎？此操作無法復原。`)) {
-      return;
-    }
-
-    DB.state.users = DB.state.users.filter(u => u.id !== userId);
-    DB.save();
-    this.render();
-    App.toast(`已刪除人員：${target.name}`, 'info');
+    App.openConfirmModal({
+      title: '刪除人員帳號',
+      message: `確定要刪除人員「<strong>${target.name} (${target.account})</strong>」嗎？`,
+      confirmText: '確認刪除人員',
+      onConfirm: () => {
+        DB.state.users = DB.state.users.filter(u => u.id !== userId);
+        DB.save();
+        this.render();
+        App.toast(`已刪除人員：${target.name}`, 'info');
+      }
+    });
   },
 
   saveUserChanges(userId) {
@@ -321,7 +318,6 @@ window.ModulePersonnel = {
       return;
     }
 
-    // 檢查帳號是否與其他人重複
     const duplicate = DB.state.users.find(
       u => u.account.toUpperCase() === accVal.toUpperCase() && u.id !== userId
     );
