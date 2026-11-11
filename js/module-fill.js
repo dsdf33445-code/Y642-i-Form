@@ -1,8 +1,9 @@
 /**
  * 模組 1：填寫表單 / 待簽核表單
- * - 加入「刪除目前表單」按鈕（搭配美化版刪除確認視窗）
- * - 完整支援設計表單設定之「上下合併 (rowspan)」、「左右合併 (colspan)」、「靠左/置中/靠右對齊」與「字型大小」
- * - 三級簽核欄名稱：檢查人、股長、課長
+ * 本次更新重點：
+ * 1. 移除「定檢綜合備註 / 異常處理說明」欄位
+ * 2. 當其他人在「設計表單」修改表單結構或唯讀文字時，填寫畫面即時同步顯示最新內容
+ * 3. 保留「刪除目前表單」按鈕與三級簽核（檢查人 ➔ 股長 ➔ 課長）
  */
 window.ModuleFill = {
   filterTag: 'ALL',
@@ -33,7 +34,7 @@ window.ModuleFill = {
     const currentTpl = currentRec ? DB.state.templates.find(t => t.id === currentRec.templateId) : null;
 
     container.innerHTML = `
-      <!-- 頂部工具列：選擇進行中定檢單 / 建立新月份定檢單 / 技術員切換 / 刪除目前表單 -->
+      <!-- 頂部工具列：選擇進行中定檢單 / 建立新定檢單 / 檢查人切換 / 刪除目前表單 -->
       <div class="bg-white border-b border-slate-200 px-3 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-xs font-extrabold text-slate-700 flex items-center gap-1.5">
@@ -129,9 +130,6 @@ window.ModuleFill = {
     `;
   },
 
-  /**
-   * 刪除目前作業中的定檢表單紀錄（搭配美化確認視窗）
-   */
   deleteCurrentRecord(recId) {
     const rec = DB.state.records.find(r => r.id === recId);
     if (!rec) return;
@@ -282,17 +280,9 @@ window.ModuleFill = {
         </div>
       </div>
 
-      <!-- 備註與逐級陳核簽章行動區 -->
-      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-3">
-        <div>
-          <label class="block text-xs font-bold text-slate-700 mb-1">定檢綜合備註 / 異常處理說明</label>
-          <textarea rows="2" ${canEditCells || isMyTurn ? '' : 'disabled'}
-            onchange="ModuleFill.updateNote('${rec.id}', this.value)"
-            placeholder="請填寫定檢補充說明或異常改善情形..."
-            class="w-full border border-slate-300 rounded-xl p-2.5 text-xs focus:outline-none focus:border-blue-600">${rec.note || ''}</textarea>
-        </div>
-
-        <div class="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
+      <!-- 逐級陳核簽章行動區（已移除綜合備註與異常說明欄位） -->
+      <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="text-xs text-slate-500">
             ${isMyTurn
               ? `<span class="text-blue-700 font-bold"><i class="fa-solid fa-circle-exclamation mr-1"></i>目前輪到您處理此表單，確認無誤後請點擊右側按鈕蓋章陳核。</span>`
@@ -335,8 +325,10 @@ window.ModuleFill = {
         const styleInfo = App.getEffectiveCellStyle(c, cellDef);
         const isReadOnly = !canEditCells || cellDef.readOnly;
 
-        let val = rec.cellValues?.[r.id]?.[c.id];
-        if (val === undefined) val = cellDef.value ?? '';
+        // 若該格為設計表單設定之唯讀文字，優先顯示範本最新文字
+        let val = (cellDef.readOnly && cellDef.value !== undefined)
+          ? cellDef.value
+          : (rec.cellValues?.[r.id]?.[c.id] !== undefined ? rec.cellValues[r.id][c.id] : (cellDef.value ?? ''));
 
         if (eff.type === 'sum') {
           const sumVal = App.computeSumCellValue(tpl, r, c, rec.cellValues);
@@ -516,13 +508,6 @@ window.ModuleFill = {
     rec.cellValues[rowId][colId] = val;
     DB.save();
     this.render();
-  },
-
-  updateNote(recId, val) {
-    const rec = DB.state.records.find(r => r.id === recId);
-    if (!rec) return;
-    rec.note = val;
-    DB.save();
   },
 
   quickCheckAllNormal(recId) {

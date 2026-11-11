@@ -1,5 +1,8 @@
 /**
  * Y642 每月定檢表系統 - 登入驗證、角色模組權限控管、二維合併儲存格引擎、美化確認視窗、電子職章與 PDF 匯出核心
+ * 已修改匯出設定：
+ * 1. 右上角不顯示 表單編號、定檢月份、點檢日期
+ * 2. 移除 綜合備註與異常說明：無異常事項。 欄位
  */
 window.App = {
   currentUser: null,        // 當前登入之帳號物件
@@ -104,7 +107,7 @@ window.App = {
   },
 
   /**
-   * 取得乾淨的「職稱」名稱（去除括號附註，例如將「B股股長 (最高管理員)」轉為「B股股長」）
+   * 取得乾淨的「職稱」名稱
    */
   getCleanTitle(user) {
     if (!user) return '';
@@ -115,7 +118,7 @@ window.App = {
   },
 
   /**
-   * 取得右上角顯示之「職位 + 姓名」（例如：課長 李宗霖、B股股長 鄭毓邦、B股技術員 吳宗穎）
+   * 取得右上角顯示之「職位 + 姓名」
    */
   getFormattedUserHeaderTitle(user) {
     if (!user) return '';
@@ -505,7 +508,10 @@ window.App = {
   },
 
   /**
-   * 渲染 A4 預覽與匯出內容
+   * 渲染 A4 預覽與匯出內容：
+   * - 右上角不顯示表單編號、定檢月份、點檢日期
+   * - 移除「綜合備註與異常說明：無異常事項。」欄位
+   * - 簽核格自動置於 A4 最底部
    */
   refreshPdfModal() {
     const rec = DB.state.records.find(r => r.id === this.pdfTargetRecordId);
@@ -560,8 +566,9 @@ window.App = {
         const eff = Object.assign({}, c, cellDef.override || {});
         const styleInfo = this.getEffectiveCellStyle(c, cellDef);
 
-        let val = rec.cellValues?.[r.id]?.[c.id];
-        if (val === undefined) val = cellDef.value ?? '';
+        let val = (cellDef.readOnly && cellDef.value !== undefined)
+          ? cellDef.value
+          : (rec.cellValues?.[r.id]?.[c.id] !== undefined ? rec.cellValues[r.id][c.id] : (cellDef.value ?? ''));
 
         let displayHtml = '';
         if (eff.type === 'checkbox') {
@@ -585,17 +592,10 @@ window.App = {
     });
 
     container.innerHTML = `
-      <!-- 上半部：表單標題與定檢表格 -->
+      <!-- 上半部：表單標題與定檢表格（已移除右上角表單編號、定檢月份、點檢日期） -->
       <div class="w-full">
-        <div class="border-b-2 border-slate-900 pb-2.5 mb-3 flex items-end justify-between">
-          <div>
-            <h2 class="text-xl font-black tracking-wide">${tpl.name}</h2>
-          </div>
-          <div class="text-right text-xs space-y-0.5 font-mono">
-            <div>表單編號：${tpl.code}</div>
-            <div>定檢月份：${rec.month}</div>
-            <div>點檢日期：${rec.inspectDate}</div>
-          </div>
+        <div class="border-b-2 border-slate-900 pb-2.5 mb-3">
+          <h2 class="text-xl font-black tracking-wide text-center">${tpl.name}</h2>
         </div>
 
         <table class="pdf-table mb-3">
@@ -610,12 +610,8 @@ window.App = {
         </table>
       </div>
 
-      <!-- 下半部：自動推至 A4 最下方之綜合備註與簽核格 -->
+      <!-- 下半部：自動推至 A4 最下方之簽核格（已移除綜合備註與異常說明欄位） -->
       <div class="w-full mt-auto pt-2">
-        <div class="border border-slate-800 p-2 text-xs mb-2.5">
-          <strong>綜合備註與異常說明：</strong> ${rec.note || '無異常事項。'}
-        </div>
-
         <table class="pdf-table">
           <thead>
             <tr>
@@ -666,6 +662,9 @@ window.App = {
     if (status === 'cloud-ok') {
       el.className = 'px-2 py-0.5 text-[10px] rounded-full bg-emerald-900/80 text-emerald-300 border border-emerald-600 font-medium shrink-0';
       el.innerHTML = `<i class="fa-solid fa-cloud-bolt mr-1"></i>${text}`;
+    } else if (status === 'syncing') {
+      el.className = 'px-2 py-0.5 text-[10px] rounded-full bg-blue-900/80 text-blue-200 border border-blue-500 font-medium shrink-0';
+      el.innerHTML = `<i class="fa-solid fa-arrows-rotate fa-spin mr-1"></i>${text}`;
     } else if (status === 'cloud-err') {
       el.className = 'px-2 py-0.5 text-[10px] rounded-full bg-amber-900/80 text-amber-300 border border-amber-600 font-medium shrink-0';
       el.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-1"></i>${text}`;
