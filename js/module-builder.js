@@ -1,9 +1,9 @@
 /**
  * 模組 2：設計表單（完整內嵌式 EXCEL 試算表介面）
  * 本次更新重點：
- * 1. 移除第 0 列 (ROW_0) 顯示，表格直接從第 1 列開始；頂部欄頭 (A, B, C...) 直接整合可編輯之欄位標題
- * 2. 強化雲端即時同步：任何儲存格文字輸入、公式列輸入皆啟動 DB.scheduleSave() 防抖自動同步，點擊「儲存表單」強制 await DB.save() 同步至所有人的網頁
- * 3. 保留滑鼠單擊直接選取儲存格、拖曳/Shift 選取多格一次批次更改型態、上下/左右合併儲存格、靠左/置中/靠右對齊、字型大小與從目前欄列向上/下/左/右插入與複製欄列
+ * 1. 加總功能支援指定任意欄位座標運算（例如：輸入 C1 = A1 + B1、A1 + B1、A1:B3）
+ * 2. 若使用者在加總公式框或 fx 編輯列輸入含有目標格的等式（如 C1 = A1 + B1），系統自動定位至 C1 儲存格並設定為加總公式
+ * 3. 在設計表單的加總儲存格中，即時顯示公式標籤與試算結果預覽
  */
 window.ModuleBuilder = {
   selectedColId: null,
@@ -44,10 +44,16 @@ window.ModuleBuilder = {
     App.toast('已復原上一步變更並同步雲端 (Ctrl+Z)', 'info');
   },
 
+  /**
+   * 取得目前編輯中的表單範本物件
+   */
   getActiveTemplate() {
     return DB.state.templates.find(t => t.id === App.activeTemplateId) || null;
   },
 
+  /**
+   * 渲染設計表單主畫面
+   */
   render() {
     const container = document.getElementById('view-builder');
     const u = App.currentUser;
@@ -162,7 +168,7 @@ window.ModuleBuilder = {
         </div>
       </div>
 
-      <!-- ==================== 3. EXCEL 多功能格式工具列 (獨立容器支援點擊儲存格即時局部刷新) ==================== -->
+      <!-- ==================== 3. EXCEL 多功能格式工具列 ==================== -->
       <div id="builder-ribbon-container" class="bg-white border-b border-slate-300 px-3 sm:px-4 py-2 flex flex-col gap-2 text-xs shrink-0">
         ${this.buildRibbonToolbarHTML(tpl)}
       </div>
@@ -174,13 +180,13 @@ window.ModuleBuilder = {
         </div>
         <div class="font-serif italic font-black text-slate-500 px-1.5 select-none">fx</div>
         <input type="text" id="excel-formula-input" value="${String(formulaBarVal).replace(/"/g, '&quot;')}"
-          placeholder="點擊下方任一儲存格即可直接打字編輯（自動同步雲端），或拖曳選取多格一次更改型態..."
+          placeholder="輸入儲存格文字，或直接輸入加總公式如 C1 = A1 + B1 或 =A1+B1（按 Enter 套用）..."
           oninput="ModuleBuilder.onFormulaBarInput(this.value)"
-          onchange="DB.save()"
+          onchange="ModuleBuilder.onFormulaBarCommit(this.value)"
           class="flex-1 bg-white border border-slate-300 rounded px-3 py-1 text-xs focus:outline-none focus:border-[#107c41]" />
       </div>
 
-      <!-- ==================== 5. 內嵌式 EXCEL 試算表主工作區 (已移除第 0 列，直接從第 1 列開始) ==================== -->
+      <!-- ==================== 5. 內嵌式 EXCEL 試算表主工作區 ==================== -->
       <div class="flex-1 overflow-auto bg-[#e6e6e6] relative" id="excel-grid-scroll-container"
         onmouseup="ModuleBuilder.handleCellMouseUp()">
         <table class="excel-spreadsheet-table" onpaste="ModuleBuilder.handleSpreadsheetPaste(event)">
@@ -234,6 +240,7 @@ window.ModuleBuilder = {
       : null;
 
     const colLetter = this.getColumnLetter(activeColIdx);
+    const currentCellCoord = `${colLetter}${activeRowIdx + 1}`;
     const selectedCellsList = this.getSelectedNormalCellsList(tpl);
     const selectedCellCount = selectedCellsList.length;
     const rangeCoordText = this.getRangeCoordDisplay(tpl, colLetter, activeRowIdx);
@@ -249,7 +256,6 @@ window.ModuleBuilder = {
     return `
       <!-- 第一排：字型大小、粗斜體、靠左/置中/靠右對齊、色彩、上下與左右合併儲存格 -->
       <div class="flex flex-wrap items-center gap-1.5">
-        <!-- 當前選取位置指示標籤 -->
         <span class="px-2 py-1 rounded-lg bg-emerald-900 text-white font-mono font-extrabold text-[11px] flex items-center gap-1">
           <i class="fa-solid fa-crosshairs text-amber-300"></i>
           <span>${rangeCoordText}</span>
@@ -431,7 +437,7 @@ window.ModuleBuilder = {
             </div>
           ` : ''}
 
-          ${this.renderInlineParameterControls(activeCol, activeRow, activeCell, hasCellOverride, effFormat, selectedCellCount)}
+          ${this.renderInlineParameterControls(activeCol, activeRow, activeCell, hasCellOverride, effFormat, selectedCellCount, currentCellCoord)}
 
           <span class="text-slate-300">|</span>
 
@@ -463,7 +469,7 @@ window.ModuleBuilder = {
   },
 
   /**
-   * 僅局部刷新上方工具列與座標方塊（不重繪表格 DOM，確保滑鼠點擊儲存格直接打字時游標不中斷）
+   * 僅局部刷新上方工具列與座標方塊
    */
   refreshRibbonAndSelectionUI() {
     const tpl = this.getActiveTemplate();
@@ -507,13 +513,23 @@ window.ModuleBuilder = {
     this.highlightRangeDOMOnly();
   },
 
+  /**
+   * 取得目前選取格在 fx 編輯列應顯示的內容（若為加總欄且設有自訂公式，優先顯示公式）
+   */
   getCurrentFormulaBarValue(tpl, activeRowIdx, activeColIdx) {
     const col = tpl.columns[activeColIdx];
     const row = tpl.rows[activeRowIdx];
     if (!row) return '';
     if (row.isSection) return row.sectionTitle || '';
     if (!col) return '';
-    const raw = row.cells?.[col.id]?.value;
+
+    const cell = row.cells?.[col.id] || {};
+    const eff = Object.assign({}, col, cell.override || {});
+    if (eff.type === 'sum' && eff.formula) {
+      return eff.formula;
+    }
+
+    const raw = cell.value;
     return raw === true ? 'true' : (raw ?? '');
   },
 
@@ -582,7 +598,10 @@ window.ModuleBuilder = {
     return map[type] || '文字';
   },
 
-  renderInlineParameterControls(col, row, cell, hasCellOverride, eff, selectedCellCount) {
+  /**
+   * 渲染各型態之專屬參數控制項（當型態為 sum 時，提供自訂欄位公式輸入框，例如 C1 = A1 + B1）
+   */
+  renderInlineParameterControls(col, row, cell, hasCellOverride, eff, selectedCellCount, currentCellCoord) {
     const isBatchOrCellOverride = selectedCellCount > 1 || Boolean(row && !row.isSection && cell && hasCellOverride);
     const onChangeFn = (prop, valExpr) => isBatchOrCellOverride
       ? `ModuleBuilder.applyCellOverridePropToSelection('${prop}', ${valExpr})`
@@ -631,19 +650,100 @@ window.ModuleBuilder = {
     }
 
     if (eff.type === 'sum') {
+      const currentFormula = eff.formula || 'COL_SUM';
       return `
-        <div class="flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg">
-          <span class="font-bold text-amber-900">加總公式：</span>
-          <select onchange="${onChangeFn('formula', 'this.value')}"
-            class="border border-amber-300 rounded px-2 py-0.5 font-bold bg-white">
-            <option value="COL_SUM" ${(eff.formula || 'COL_SUM') === 'COL_SUM' ? 'selected' : ''}>COL_SUM (加總本欄上方)</option>
-            <option value="ROW_SUM" ${eff.formula === 'ROW_SUM' ? 'selected' : ''}>ROW_SUM (加總同列左側)</option>
-          </select>
+        <div class="flex flex-wrap items-center gap-1.5 bg-amber-50 border border-amber-300 px-2.5 py-0.5 rounded-lg">
+          <span class="font-extrabold text-amber-900">
+            <i class="fa-solid fa-calculator mr-1 text-amber-600"></i>指定加總公式：
+          </span>
+          <input type="text"
+            value="${String(currentFormula).replace(/"/g, '&quot;')}"
+            placeholder="例: ${currentCellCoord} = A1 + B1 或 A1:B3"
+            title="可輸入指定欄位公式（如 C1 = A1 + B1、A1 + B1、A1:A5）或 COL_SUM / ROW_SUM"
+            onchange="ModuleBuilder.applyCustomSumFormula(this.value)"
+            class="w-48 border border-amber-400 rounded px-2 py-0.5 font-mono font-bold text-amber-950 bg-white focus:outline-none focus:border-amber-600" />
+          <button type="button" onclick="ModuleBuilder.applyCustomSumFormula('COL_SUM')"
+            title="自動加總本欄上方所有數值"
+            class="px-2 py-0.5 rounded text-[11px] font-bold border ${currentFormula === 'COL_SUM' ? 'bg-amber-600 text-white border-amber-700' : 'bg-white text-amber-800 border-amber-300 hover:bg-amber-100'}">
+            本欄加總
+          </button>
+          <button type="button" onclick="ModuleBuilder.applyCustomSumFormula('ROW_SUM')"
+            title="自動加總同列左側所有數值"
+            class="px-2 py-0.5 rounded text-[11px] font-bold border ${currentFormula === 'ROW_SUM' ? 'bg-amber-600 text-white border-amber-700' : 'bg-white text-amber-800 border-amber-300 hover:bg-amber-100'}">
+            同列加總
+          </button>
+          <span class="font-bold text-amber-900 ml-1">單位：</span>
+          <input type="text" value="${eff.unit || ''}" placeholder="選填"
+            onchange="${onChangeFn('unit', 'this.value')}"
+            class="w-12 border border-amber-300 rounded px-1.5 py-0.5 font-mono text-center bg-white" />
         </div>
       `;
     }
 
     return '';
+  },
+
+  /**
+   * 套用使用者輸入的自訂加總公式（支援 "C1 = A1 + B1"、"= A1 + B1"、"A1 + B1"、"A1:B3"、"COL_SUM"、"ROW_SUM"）
+   * 若等號左側指定了目標儲存格座標（例如 C1 = A1 + B1），系統會自動定位至 C1 並將公式寫入 C1
+   */
+  applyCustomSumFormula(rawFormulaStr) {
+    const tpl = this.getActiveTemplate();
+    if (!tpl) return;
+
+    const cleaned = String(rawFormulaStr || '').trim().toUpperCase();
+    if (!cleaned) return;
+
+    this.pushUndoState(tpl);
+
+    // 檢查是否為「目標格 = 運算式」格式（例如 C1 = A1 + B1）
+    const eqMatch = cleaned.match(/^([A-Z]+\d+)\s*=\s*(.+)$/);
+    if (eqMatch) {
+      const targetCoordStr = eqMatch[1];
+      const rhsExpr = eqMatch[2].trim();
+      const targetPos = App.parseCellCoord(targetCoordStr);
+
+      if (targetPos && targetPos.rIdx >= 0 && targetPos.rIdx < tpl.rows.length && targetPos.cIdx >= 0 && targetPos.cIdx < tpl.columns.length) {
+        const targetRow = tpl.rows[targetPos.rIdx];
+        const targetCol = tpl.columns[targetPos.cIdx];
+        if (targetRow && !targetRow.isSection && targetCol) {
+          if (!targetRow.cells) targetRow.cells = {};
+          if (!targetRow.cells[targetCol.id]) targetRow.cells[targetCol.id] = { value: '' };
+
+          const existingOverride = targetRow.cells[targetCol.id].override || {};
+          targetRow.cells[targetCol.id].override = Object.assign({}, existingOverride, {
+            type: 'sum',
+            formula: `${targetCoordStr} = ${rhsExpr}`
+          });
+
+          // 自動將選取焦點移至該目標儲存格
+          this.selectedRowId = targetRow.id;
+          this.selectedColId = targetCol.id;
+          this.rangeStart = { rIdx: targetPos.rIdx, cIdx: targetPos.cIdx };
+          this.rangeEnd = { rIdx: targetPos.rIdx, cIdx: targetPos.cIdx };
+
+          DB.save();
+          this.render();
+          App.toast(`已設定儲存格 [${targetCoordStr}] 加總公式：${targetCoordStr} = ${rhsExpr}`, 'success');
+          return;
+        }
+      }
+    }
+
+    // 一般情況：套用至目前選取的儲存格
+    const selectedCells = this.getSelectedNormalCellsList(tpl);
+    if (selectedCells.length > 0) {
+      selectedCells.forEach(({ cell }) => {
+        const existingOverride = cell.override || {};
+        cell.override = Object.assign({}, existingOverride, {
+          type: 'sum',
+          formula: cleaned
+        });
+      });
+      DB.save();
+      this.render();
+      App.toast(`已設定加總公式：${cleaned}`, 'success');
+    }
   },
 
   isCellInSelectedRange(rIdx, cIdx) {
@@ -655,6 +755,9 @@ window.ModuleBuilder = {
     return rIdx >= r1 && rIdx <= r2 && cIdx >= c1 && cIdx <= c2;
   },
 
+  /**
+   * 渲染試算表資料列（含自訂加總公式標籤與即時試算結果預覽）
+   */
   renderExcelGridRows(tpl) {
     const gridMap = App.computeMergedGridMap(tpl);
 
@@ -710,7 +813,9 @@ window.ModuleBuilder = {
           const hasRange = eff.min !== undefined || eff.max !== undefined;
           formatTag += `<span class="text-[9px] font-mono text-blue-600 bg-blue-50 px-1 rounded shrink-0">${hasRange ? `[${eff.min ?? '-∞'}~${eff.max ?? '∞'}${eff.unit || ''}]` : '數值'}</span>`;
         } else if (eff.type === 'sum') {
-          formatTag += `<span class="text-[9px] font-mono text-amber-800 bg-amber-100 px-1 rounded font-bold shrink-0">∑${eff.formula || 'COL'}</span>`;
+          const fText = eff.formula || 'COL_SUM';
+          const previewSum = App.computeSumCellValue(tpl, r, c, null);
+          formatTag += `<span class="text-[9px] font-mono text-amber-900 bg-amber-100 border border-amber-300 px-1 rounded font-bold shrink-0" title="加總公式：${fText}">∑ ${fText} (= ${previewSum}${eff.unit || ''})</span>`;
         } else if (eff.type === 'checkbox') {
           formatTag += `<span class="text-[9px] text-emerald-700 bg-emerald-50 px-1 rounded shrink-0">☑${eff.checkLabel || '正常'}</span>`;
         } else if (eff.type === 'select') {
@@ -736,10 +841,11 @@ window.ModuleBuilder = {
                 data-r-idx="${rIdx}"
                 data-c-idx="${cIdx}"
                 value="${String(displayVal).replace(/"/g, '&quot;')}"
+                placeholder="${eff.type === 'sum' ? '自動加總欄' : ''}"
                 style="${styleInfo.cssText}"
                 onfocus="ModuleBuilder.onCellInputFocus('${r.id}','${c.id}', ${rIdx}, ${cIdx})"
                 oninput="ModuleBuilder.updateCellDefaultValueSilent('${r.id}','${c.id}',this.value)"
-                onchange="DB.save()"
+                onchange="ModuleBuilder.onCellInputCommit('${r.id}','${c.id}',this.value)"
                 onkeydown="ModuleBuilder.handleCellKeyDown(event, ${rIdx}, ${cIdx})"
                 class="excel-cell-input ${cell.readOnly ? 'text-slate-600' : 'text-slate-900'}" />
               ${formatTag}
@@ -863,6 +969,8 @@ window.ModuleBuilder = {
           cell.value = true;
         } else if (newType === 'select' && !cell.override.options) {
           cell.override.options = col.options || ['合格', '待追蹤', '異常'];
+        } else if (newType === 'sum' && !cell.override.formula) {
+          cell.override.formula = 'A1 + B1';
         }
       }
     });
@@ -1051,7 +1159,7 @@ window.ModuleBuilder = {
   },
 
   /**
-   * 欄頭直接打字修改欄位標題，並觸發自動防抖雲端同步 (DB.scheduleSave)
+   * 欄頭直接打字修改欄位標題，並觸發自動防抖雲端同步
    */
   updateColumnTitleSilent(colId, val) {
     const tpl = this.getActiveTemplate();
@@ -1063,7 +1171,7 @@ window.ModuleBuilder = {
   },
 
   /**
-   * 儲存格打字修改內容，並觸發自動防抖雲端同步 (DB.scheduleSave)
+   * 儲存格打字修改內容，並觸發自動防抖雲端同步
    */
   updateCellDefaultValueSilent(rowId, colId, val) {
     const tpl = this.getActiveTemplate();
@@ -1081,7 +1189,25 @@ window.ModuleBuilder = {
   },
 
   /**
-   * 大分類標題打字修改，並觸發自動防抖雲端同步 (DB.scheduleSave)
+   * 當儲存格輸入完成 (onchange) 時，若內容為公式（例如 "=A1+B1" 或 "C1 = A1 + B1"），自動轉為加總欄位並重繪試算結果
+   */
+  onCellInputCommit(rowId, colId, val) {
+    const trimmed = String(val || '').trim();
+    if (/^([A-Za-z]+\d+\s*=|=)\s*[A-Za-z]+\d+/.test(trimmed)) {
+      const tpl = this.getActiveTemplate();
+      const row = tpl?.rows.find(r => r.id === rowId);
+      if (row && row.cells?.[colId]) {
+        row.cells[colId].value = '';
+      }
+      this.applyCustomSumFormula(trimmed);
+      return;
+    }
+    DB.save();
+    this.render();
+  },
+
+  /**
+   * 大分類標題打字修改，並觸發自動防抖雲端同步
    */
   updateSectionTitleSilent(rowId, val) {
     const tpl = this.getActiveTemplate();
@@ -1096,7 +1222,7 @@ window.ModuleBuilder = {
   },
 
   /**
-   * fx 資料編輯列打字修改，並觸發自動防抖雲端同步 (DB.scheduleSave)
+   * fx 資料編輯列打字修改
    */
   onFormulaBarInput(val) {
     const tpl = this.getActiveTemplate();
@@ -1111,11 +1237,33 @@ window.ModuleBuilder = {
       if (secInput) secInput.value = val;
     } else if (this.selectedColId) {
       if (!row.cells[this.selectedColId]) row.cells[this.selectedColId] = {};
-      row.cells[this.selectedColId].value = val;
-      const cellInput = document.querySelector(`input[data-row-id="${row.id}"][data-col-id="${this.selectedColId}"]`);
-      if (cellInput) cellInput.value = val;
+      const cell = row.cells[this.selectedColId];
+      const col = tpl.columns.find(c => c.id === this.selectedColId) || {};
+      const eff = Object.assign({}, col, cell.override || {});
+
+      if (eff.type === 'sum') {
+        if (!cell.override) cell.override = { type: 'sum' };
+        cell.override.formula = val.toUpperCase();
+      } else {
+        cell.value = val;
+        const cellInput = document.querySelector(`input[data-row-id="${row.id}"][data-col-id="${this.selectedColId}"]`);
+        if (cellInput) cellInput.value = val;
+      }
     }
     DB.scheduleSave();
+  },
+
+  /**
+   * fx 資料編輯列提交時，檢查是否輸入了加總公式（如 C1 = A1 + B1 或 =A1+B1）
+   */
+  onFormulaBarCommit(val) {
+    const trimmed = String(val || '').trim();
+    if (/^([A-Za-z]+\d+\s*=|=)\s*[A-Za-z]+\d+/.test(trimmed)) {
+      this.applyCustomSumFormula(trimmed);
+      return;
+    }
+    DB.save();
+    this.render();
   },
 
   handleCellKeyDown(e, rIdx, cIdx) {
@@ -1728,7 +1876,12 @@ window.ModuleBuilder = {
               e: { r: sheetRowIdx + mapInfo.rowspan - 1, c: cIdx + mapInfo.colspan - 1 }
             });
           }
-          const val = r.cells?.[c.id]?.value;
+          const cellDef = r.cells?.[c.id] || {};
+          const eff = Object.assign({}, c, cellDef.override || {});
+          if (eff.type === 'sum') {
+            return App.computeSumCellValue(tpl, r, c, null);
+          }
+          const val = cellDef.value;
           return val === true ? '✓' : (val ?? '');
         }));
       }
@@ -1783,6 +1936,9 @@ window.ModuleBuilder = {
     const col = tpl.columns.find(c => c.id === colId);
     if (!col) return;
     col[prop] = val;
+    if (prop === 'type' && val === 'sum' && !col.formula) {
+      col.formula = 'COL_SUM';
+    }
     DB.save();
     this.render();
   },
