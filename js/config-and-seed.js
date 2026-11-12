@@ -1,6 +1,6 @@
 /**
  * Y642 每月定檢表系統 - 核心設定、預設種子資料與 Firebase Cloud Firestore 即時同步引擎
- * 已修復多人設計表單即時同步機制：採用獨立 Client ID、防抖自動雲端存檔與範本結構自動同步
+ * 支援一份表單多個分頁 (sheets) 結構與雲端即時同步
  */
 window.AppConfig = {
   STORAGE_KEY: 'Y642_INSPECTION_SYSTEM_V3',
@@ -237,20 +237,33 @@ function createDefaultUsers() {
 }
 
 /**
- * 產生預設各股與其他之定檢表單範本
+ * 產生預設各股與其他之定檢表單範本（內建第1列作為表格標題列，並支援 sheets 多分頁）
  */
 function createDefaultTemplates() {
   const baseColumns = [
-    { id: 'c1', title: '項次', width: 55, type: 'text', align: 'center' },
-    { id: 'c2', title: '檢查設備 / 項目名稱', width: 210, type: 'text', align: 'left' },
-    { id: 'c3', title: '檢查標準說明', width: 170, type: 'text', align: 'left' },
-    { id: 'c4', title: '量測數值', width: 130, type: 'number', min: 210, max: 230, unit: 'V', align: 'center' },
-    { id: 'c5', title: '目視點檢', width: 95, type: 'checkbox', checkLabel: '正常', align: 'center' },
-    { id: 'c6', title: '綜合判定', width: 120, type: 'select', options: ['合格', '待追蹤', '異常需檢修'], align: 'center' },
-    { id: 'c7', title: '點檢日期', width: 130, type: 'date', align: 'center' }
+    { id: 'c1', title: 'A', width: 55, type: 'text', align: 'center' },
+    { id: 'c2', title: 'B', width: 210, type: 'text', align: 'left' },
+    { id: 'c3', title: 'C', width: 170, type: 'text', align: 'left' },
+    { id: 'c4', title: 'D', width: 130, type: 'number', min: 210, max: 230, unit: 'V', align: 'center' },
+    { id: 'c5', title: 'E', width: 95, type: 'checkbox', checkLabel: '正常', align: 'center' },
+    { id: 'c6', title: 'F', width: 120, type: 'select', options: ['合格', '待追蹤', '異常需檢修'], align: 'center' },
+    { id: 'c7', title: 'G', width: 130, type: 'date', align: 'center' }
   ];
 
   const makeRows = (equipPrefix) => [
+    {
+      id: 'r_header',
+      isSection: false,
+      cells: {
+        c1: { value: '項次', readOnly: true, bold: true, bgColor: '#f1f5f9', align: 'center', override: { type: 'text' } },
+        c2: { value: '檢查設備 / 項目名稱', readOnly: true, bold: true, bgColor: '#f1f5f9', align: 'center', override: { type: 'text' } },
+        c3: { value: '檢查標準說明', readOnly: true, bold: true, bgColor: '#f1f5f9', align: 'center', override: { type: 'text' } },
+        c4: { value: '量測數值', readOnly: true, bold: true, bgColor: '#f1f5f9', align: 'center', override: { type: 'text' } },
+        c5: { value: '目視點檢', readOnly: true, bold: true, bgColor: '#f1f5f9', align: 'center', override: { type: 'text' } },
+        c6: { value: '綜合判定', readOnly: true, bold: true, bgColor: '#f1f5f9', align: 'center', override: { type: 'text' } },
+        c7: { value: '點檢日期', readOnly: true, bold: true, bgColor: '#f1f5f9', align: 'center', override: { type: 'text' } }
+      }
+    },
     {
       id: 'r_sec1',
       isSection: true,
@@ -301,9 +314,9 @@ function createDefaultTemplates() {
       isSection: false,
       cells: {
         c1: { value: '合計', readOnly: true },
-        c2: { value: '上方量測數值自動加總 (SUM)', readOnly: true },
-        c3: { value: '系統自動計算 COL_SUM', readOnly: true },
-        c4: { value: '', override: { type: 'sum', formula: 'COL_SUM', unit: '' } },
+        c2: { value: '量測數值加總 (D3+D4+D5)', readOnly: true },
+        c3: { value: '自訂公式 D3+D4+D5', readOnly: true },
+        c4: { value: '', override: { type: 'sum', formula: 'D3+D4+D5', unit: '' } },
         c5: { value: true },
         c6: { value: '合格' },
         c7: { value: new Date().toISOString().slice(0, 10) }
@@ -311,72 +324,32 @@ function createDefaultTemplates() {
     }
   ];
 
+  const buildTpl = (id, name, code, tag, createdBy, equipPrefix) => {
+    const cols = JSON.parse(JSON.stringify(baseColumns));
+    const rows = makeRows(equipPrefix);
+    return {
+      id,
+      name,
+      code,
+      tag,
+      cycle: '每月',
+      department: `Y642 電力維護課 (${tag})`,
+      updatedAt: '2026-11-01',
+      createdBy,
+      columns: cols,
+      rows: rows,
+      sheets: [
+        { id: 'sheet_1', name: '工作表1', columns: cols, rows: rows }
+      ]
+    };
+  };
+
   return [
-    {
-      id: 'TPL_A_01',
-      name: 'A股 - 高壓變電站配電盤每月定檢表',
-      code: 'Y642-A-M01',
-      tag: 'A股',
-      cycle: '每月',
-      department: 'Y642 電力維護課 (A股)',
-      EquipmentCode: 'SUB-A01',
-      updatedAt: '2026-11-01',
-      createdBy: '219691',
-      columns: JSON.parse(JSON.stringify(baseColumns)),
-      rows: makeRows('A股 #1 變電站')
-    },
-    {
-      id: 'TPL_B_01',
-      name: 'B股 - 特高壓變壓器與斷路器每月定檢表',
-      code: 'Y642-B-M01',
-      tag: 'B股',
-      cycle: '每月',
-      department: 'Y642 電力維護課 (B股)',
-      EquipmentCode: 'SUB-B01',
-      updatedAt: '2026-11-01',
-      createdBy: '209874',
-      columns: JSON.parse(JSON.stringify(baseColumns)),
-      rows: makeRows('B股 #2 變電站')
-    },
-    {
-      id: 'TPL_C_01',
-      name: 'C股 - 廠區緊急發電機與ATS每月定檢表',
-      code: 'Y642-C-M01',
-      tag: 'C股',
-      cycle: '每月',
-      department: 'Y642 電力維護課 (C股)',
-      EquipmentCode: 'GEN-C01',
-      updatedAt: '2026-11-01',
-      createdBy: '166629',
-      columns: JSON.parse(JSON.stringify(baseColumns)),
-      rows: makeRows('C股 緊急發電機組')
-    },
-    {
-      id: 'TPL_D_01',
-      name: 'D股 - 直流充電機與蓄電池組每月定檢表',
-      code: 'Y642-D-M01',
-      tag: 'D股',
-      cycle: '每月',
-      department: 'Y642 電力維護課 (D股)',
-      EquipmentCode: 'UPS-D01',
-      updatedAt: '2026-11-01',
-      createdBy: '230854',
-      columns: JSON.parse(JSON.stringify(baseColumns)),
-      rows: makeRows('D股 直流電瓶室')
-    },
-    {
-      id: 'TPL_OTHER_01',
-      name: '其他 - 公共照明與附屬電氣設備每月定檢表',
-      code: 'Y642-E-M01',
-      tag: '其他',
-      cycle: '每月',
-      department: 'Y642 電力維護課 (其他)',
-      EquipmentCode: 'PUB-E01',
-      updatedAt: '2026-11-01',
-      createdBy: '183715',
-      columns: JSON.parse(JSON.stringify(baseColumns)),
-      rows: makeRows('全廠公共電氣設備')
-    }
+    buildTpl('TPL_A_01', 'A股 - 高壓變電站配電盤每月定檢表', 'Y642-A-M01', 'A股', '219691', 'A股 #1 變電站'),
+    buildTpl('TPL_B_01', 'B股 - 特高壓變壓器與斷路器每月定檢表', 'Y642-B-M01', 'B股', '209874', 'B股 #2 變電站'),
+    buildTpl('TPL_C_01', 'C股 - 廠區緊急發電機與ATS每月定檢表', 'Y642-C-M01', 'C股', '166629', 'C股 緊急發電機組'),
+    buildTpl('TPL_D_01', 'D股 - 直流充電機與蓄電池組每月定檢表', 'Y642-D-M01', 'D股', '230854', 'D股 直流電瓶室'),
+    buildTpl('TPL_OTHER_01', '其他 - 公共照明與附屬電氣設備每月定檢表', 'Y642-E-M01', '其他', '183715', '全廠公共電氣設備')
   ];
 }
 
@@ -390,13 +363,16 @@ function createDefaultRecords(templates) {
 
   const extractCells = (tpl) => {
     const data = {};
-    tpl.rows.forEach(r => {
-      if (!r.isSection) {
-        data[r.id] = {};
-        Object.keys(r.cells).forEach(cid => {
-          data[r.id][cid] = r.cells[cid].value;
-        });
-      }
+    const sheets = Array.isArray(tpl.sheets) && tpl.sheets.length > 0 ? tpl.sheets : [{ rows: tpl.rows || [] }];
+    sheets.forEach(sh => {
+      (sh.rows || []).forEach(r => {
+        if (!r.isSection) {
+          data[r.id] = {};
+          Object.keys(r.cells || {}).forEach(cid => {
+            data[r.id][cid] = r.cells[cid].value;
+          });
+        }
+      });
     });
     return data;
   };
@@ -543,16 +519,23 @@ window.DB = {
       users,
       templates,
       records,
-      updatedAt: 1000 // 初始種子設定較小時間戳記，確保雲端有正式資料時優先採用雲端版本
+      updatedAt: 1000
     };
     localStorage.setItem(AppConfig.STORAGE_KEY, JSON.stringify(this.state));
   },
 
   /**
-   * 當表單範本 (templates) 被修改時，自動將最新的結構與唯讀預設文字同步至未結案之填表草稿 (records)
+   * 同步所有表單範本的多分頁結構 (sheets) 與進行中草稿紀錄 (records)
    */
   syncDraftRecordsWithTemplates() {
     if (!Array.isArray(this.state.templates) || !Array.isArray(this.state.records)) return;
+
+    this.state.templates.forEach(tpl => {
+      if (window.App && typeof App.ensureTemplateSheets === 'function') {
+        App.ensureTemplateSheets(tpl);
+      }
+    });
+
     this.state.records.forEach(rec => {
       if (rec.stage === 'completed') return;
       const tpl = this.state.templates.find(t => t.id === rec.templateId);
@@ -563,16 +546,21 @@ window.DB = {
       rec.tag = tpl.tag || rec.tag;
 
       if (!rec.cellValues) rec.cellValues = {};
-      tpl.rows.forEach(r => {
-        if (r.isSection) return;
-        if (!rec.cellValues[r.id]) rec.cellValues[r.id] = {};
-        tpl.columns.forEach(c => {
-          const cellDef = r.cells?.[c.id];
-          if (!cellDef) return;
-          // 若該儲存格在設計表單被設為「唯讀固定字」，或草稿中尚無該格的值，即同步為範本最新設定值
-          if (cellDef.readOnly || rec.cellValues[r.id][c.id] === undefined) {
-            rec.cellValues[r.id][c.id] = cellDef.value ?? '';
-          }
+      const sheets = Array.isArray(tpl.sheets) && tpl.sheets.length > 0
+        ? tpl.sheets
+        : [{ columns: tpl.columns || [], rows: tpl.rows || [] }];
+
+      sheets.forEach(sh => {
+        (sh.rows || []).forEach(r => {
+          if (r.isSection) return;
+          if (!rec.cellValues[r.id]) rec.cellValues[r.id] = {};
+          (sh.columns || []).forEach(c => {
+            const cellDef = r.cells?.[c.id];
+            if (!cellDef) return;
+            if (cellDef.readOnly || rec.cellValues[r.id][c.id] === undefined) {
+              rec.cellValues[r.id][c.id] = cellDef.value ?? '';
+            }
+          });
         });
       });
     });
@@ -588,7 +576,7 @@ window.DB = {
   },
 
   /**
-   * 防抖自動雲端同步（適用於設計表單打字輸入時，停筆 400ms 後自動同步至 Firebase 雲端）
+   * 防抖自動雲端同步（停筆 400ms 後自動寫入 Firebase）
    */
   scheduleSave() {
     this.saveLocal();
@@ -599,7 +587,7 @@ window.DB = {
   },
 
   /**
-   * 立即寫入本機與 Firebase Cloud Firestore，觸發所有連線裝置即時同步
+   * 立即寫入本機與 Firebase Cloud Firestore
    */
   async save() {
     if (this.debounceTimer) {
@@ -609,7 +597,6 @@ window.DB = {
     this.saveLocal();
 
     if (!this.isCloudConnected || !this.firestoreDocRef || !this.setDocFn) {
-      // 若 Firebase 尚在初始連線中，標記待同步，連線完成後立即補推上雲端
       this.hasPendingSaveBeforeConnect = true;
       return false;
     }
@@ -679,7 +666,6 @@ window.DB = {
 
       const snap = await getDoc(docRef);
       if (!snap.exists()) {
-        // 雲端尚無資料時，將本機初始狀態寫入 Firestore
         const writeToken = `${this.clientId}_${Date.now()}`;
         this.lastWriteToken = writeToken;
         await setDoc(docRef, {
@@ -689,7 +675,6 @@ window.DB = {
           writeToken
         });
       } else {
-        // 雲端已有資料時，載入雲端最新狀態
         const remoteData = snap.data();
         if (remoteData && remoteData.payload) {
           try {
@@ -711,13 +696,11 @@ window.DB = {
         }
       }
 
-      // 啟動即時監聽：任何同仁在「設計表單」、「填寫表單」、「表單管理」或「人員管理」儲存，全員畫面即時同步更新
       onSnapshot(docRef, (docSnap) => {
         if (!docSnap.exists()) return;
         const data = docSnap.data();
         if (!data || !data.payload) return;
 
-        // 若該次變更為本機自己剛剛送出的同一筆 writeToken，則不重複重繪本機畫面（避免打字游標跳動）
         if (data.writeToken && data.writeToken === this.lastWriteToken) {
           return;
         }
@@ -749,7 +732,6 @@ window.DB = {
         App.updateSyncBadge('cloud-ok', '雲端即時同步中');
       }
 
-      // 若連線完成前有待同步的修改，立即補推至雲端
       if (this.hasPendingSaveBeforeConnect) {
         this.hasPendingSaveBeforeConnect = false;
         this.save();
