@@ -33,15 +33,6 @@ body {
   vertical-align: middle;
   transition: background-color 0.1s ease;
 }
-.sheet-grid th.col-header {
-  background: #f1f5f9;
-  color: #334155;
-  font-weight: 700;
-  font-size: 12px;
-  text-align: center;
-  height: 34px;
-  user-select: none;
-}
 
 /* ==================== 內嵌式 EXCEL 試算表專屬樣式 ==================== */
 .excel-spreadsheet-table {
@@ -60,7 +51,7 @@ body {
   background: #f3f2f1;
   width: 44px;
   min-width: 44px;
-  height: 44px;
+  height: 30px;
   border-right: 2px solid #b3b0ad !important;
   border-bottom: 2px solid #b3b0ad !important;
   position: sticky;
@@ -82,7 +73,7 @@ body {
   background: #f3f2f1;
   color: #323130;
   font-size: 12px;
-  height: 44px;
+  height: 30px;
   text-align: center;
   cursor: pointer;
   position: sticky;
@@ -172,6 +163,44 @@ body {
   pointer-events: none;
 }
 
+/* ==================== EXCEL 底部工作表分頁列 (Sheet Tabs) ==================== */
+.excel-sheet-tabs-bar {
+  background: #f3f2f1;
+  border-top: 1px solid #c8c6c4;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  shrink: 0;
+}
+.excel-sheet-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  color: #475569;
+  background: #e2e8f0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.excel-sheet-tab:hover {
+  background: #cbd5e1;
+  color: #0f172a;
+}
+.excel-sheet-tab.active-tab {
+  background: #ffffff;
+  color: #107c41;
+  border-color: #cbd5e1;
+  border-bottom: 2.5px solid #107c41;
+  box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.05);
+}
+
 /* 超標與正常狀態 */
 .cell-out-of-range {
   background-color: #fef2f2 !important;
@@ -202,22 +231,26 @@ body {
   user-select: none;
 }
 
-/* ==================== A4 紙張預覽與簽核格置底排版 ==================== */
+/* ==================== A4 紙張預覽與單頁自動縮放排版 ==================== */
 .a4-sheet {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   box-sizing: border-box;
   background: #ffffff;
+  overflow: hidden;
+  position: relative;
 }
 .a4-sheet.portrait {
   width: 210mm;
-  min-height: 296mm;
+  height: 296mm;
+  max-height: 296mm;
   padding: 10mm 12mm;
 }
 .a4-sheet.landscape {
   width: 297mm;
-  min-height: 209mm;
+  height: 209mm;
+  max-height: 209mm;
   padding: 8mm 10mm;
 }
 .pdf-table {
@@ -232,12 +265,8 @@ body {
   line-height: 1.35;
   vertical-align: middle;
 }
-.pdf-table th {
-  background-color: #f1f5f9;
-  font-weight: 700;
-}
 
-/* 列印專用規則：維持完整 A4 尺寸並讓簽核格自動置於 A4 最底部，同時防止空白第 2 頁 */
+/* 列印專用規則：維持完整單頁 A4 尺寸並讓簽核格自動置於 A4 最底部 */
 @page {
   margin: 0;
 }
@@ -278,10 +307,12 @@ body {
     flex-direction: column !important;
     justify-content: space-between !important;
     width: 210mm !important;
-    min-height: 296mm !important;
+    height: 296mm !important;
+    max-height: 296mm !important;
     padding: 10mm 12mm !important;
     margin: 0 auto !important;
     box-shadow: none !important;
+    overflow: hidden !important;
     page-break-after: avoid !important;
     break-after: avoid !important;
   }
@@ -291,10 +322,12 @@ body {
     flex-direction: column !important;
     justify-content: space-between !important;
     width: 297mm !important;
-    min-height: 209mm !important;
+    height: 209mm !important;
+    max-height: 209mm !important;
     padding: 8mm 10mm !important;
     margin: 0 auto !important;
     box-shadow: none !important;
+    overflow: hidden !important;
     page-break-after: avoid !important;
     break-after: avoid !important;
   }
