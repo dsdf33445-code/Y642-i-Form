@@ -1,8 +1,10 @@
 /**
- * Y642 每月定檢表系統 - 登入驗證、角色模組權限控管、二維合併儲存格引擎、美化確認視窗、電子職章與 PDF 匯出核心
- * 已修改匯出設定：
- * 1. 右上角不顯示 表單編號、定檢月份、點檢日期
- * 2. 移除 綜合備註與異常說明：無異常事項。 欄位
+ * Y642 每月定檢表系統 - 登入驗證、多工作表分頁管理、自訂座標加總引擎、A4 自動縮放預覽與 PDF 匯出核心
+ * 本次升級重點：
+ * 1. 加總功能支援指定儲存格座標與四則運算（例：C1 = A1 + B1、A1+B1+C1、SUM(A1:A5)、COL_SUM、ROW_SUM）
+ * 2. 預覽與匯出移除表頭列顯示
+ * 3. 支援一份表單多個分頁 (sheets)，可於預覽視窗切換分頁
+ * 4. 預覽與匯出自動將表單等比例縮放至單頁 A4 大小（確保表單與底部簽核格完整顯示在同一頁 A4）
  */
 window.App = {
   currentUser: null,        // 當前登入之帳號物件
@@ -11,6 +13,7 @@ window.App = {
   activeRecordId: null,     // 當前於填寫模組開啟的紀錄 ID
   activeTemplateId: null,   // 當前於設計表單開啟的範本 ID
   pdfTargetRecordId: null,  // 當前預覽 PDF 的紀錄 ID
+  pdfActiveSheetIdx: 0,     // 當前預覽 PDF 的分頁索引
   confirmCallback: null,    // 美化確認視窗回呼函式
   CYCLES: ['每月', '每季', '半年', '每年'],
 
@@ -38,7 +41,7 @@ window.App = {
   },
 
   /**
-   * 快速帶入帳號（僅帶入帳號，清空密碼欄並自動聚焦至密碼輸入框）
+   * 快速帶入帳號
    */
   quickFillLogin(acc) {
     const accEl = document.getElementById('login-account');
@@ -50,6 +53,42 @@ window.App = {
     }
     const errEl = document.getElementById('login-error');
     if (errEl) errEl.classList.add('hidden');
+  },
+
+  /**
+   * 確保表單範本具備多工作表分頁 (sheets) 陣列，並向下相容既有單頁範本
+   */
+  ensureTemplateSheets(tpl) {
+    if (!tpl) return [];
+    if (!Array.isArray(tpl.sheets) || tpl.sheets.length === 0) {
+      tpl.sheets = [
+        {
+          id: 'sheet_1',
+          name: '工作表1',
+          columns: Array.isArray(tpl.columns) ? tpl.columns : [],
+          rows: Array.isArray(tpl.rows) ? tpl.rows : []
+        }
+      ];
+    }
+    // 確保每個分頁內的列 ID 唯一，避免跨分頁填寫資料時互相覆蓋
+    const seenRowIds = new Set();
+    tpl.sheets.forEach((sh, sIdx) => {
+      if (!sh.id) sh.id = 'sheet_' + (sIdx + 1);
+      if (!sh.name) sh.name = `工作表${sIdx + 1}`;
+      if (!Array.isArray(sh.columns)) sh.columns = [];
+      if (!Array.isArray(sh.rows)) sh.rows = [];
+      sh.rows.forEach((r, rIdx) => {
+        if (!r.id || seenRowIds.has(r.id)) {
+          r.id = `${sh.id}_r_${rIdx}_${Date.now().toString().slice(-4)}`;
+        }
+        seenRowIds.add(r.id);
+      });
+    });
+
+    // 同步第一分頁至頂層屬性以保持相容
+    tpl.columns = tpl.sheets[0].columns;
+    tpl.rows = tpl.sheets[0].rows;
+    return tpl.sheets;
   },
 
   /**
@@ -80,7 +119,7 @@ window.App = {
   },
 
   /**
-   * 依據標籤名稱回傳專屬顏色樣式 (A股、B股、C股、D股、其他)
+   * 依據標籤名稱回傳專屬顏色樣式
    */
   getTagBadgeClass(tag) {
     const map = {
@@ -94,7 +133,7 @@ window.App = {
   },
 
   /**
-   * 依據填寫週期回傳顏色樣式 (每月、每季、半年、每年)
+   * 依據填寫週期回傳顏色樣式
    */
   getCycleBadgeClass(cycle) {
     const map = {
@@ -106,9 +145,6 @@ window.App = {
     return map[cycle] || 'bg-sky-50 text-sky-700 border border-sky-200';
   },
 
-  /**
-   * 取得乾淨的「職稱」名稱
-   */
   getCleanTitle(user) {
     if (!user) return '';
     const cleaned = String(user.roleTitle || '').replace(/\s*[\(（].*?[\)）]/g, '').trim();
@@ -117,9 +153,6 @@ window.App = {
     return roleMap[user.role] || '人員';
   },
 
-  /**
-   * 取得右上角顯示之「職位 + 姓名」
-   */
   getFormattedUserHeaderTitle(user) {
     if (!user) return '';
     const cleanTitle = this.getCleanTitle(user);
@@ -164,9 +197,6 @@ window.App = {
     this.showLoginScreen();
   },
 
-  /**
-   * 依據登入者角色回傳可顯示的模組清單
-   */
   getAllowedModulesForCurrentUser() {
     const u = this.currentUser;
     if (!u) return [];
@@ -201,9 +231,6 @@ window.App = {
     return modules;
   },
 
-  /**
-   * 檢查某張表單範本是否對指定使用者可見
-   */
   canUserAccessTemplate(user, template) {
     if (!user || !template) return false;
     if (user.id === AppConfig.SUPER_ADMIN_ID || user.role === 'admin' || user.role === 'chief') return true;
@@ -392,21 +419,23 @@ window.App = {
   /**
    * 二維合併儲存格計算引擎（同時支援上下跨列合併 rowspan 與左右跨欄合併 colspan）
    */
-  computeMergedGridMap(tpl) {
-    const rowCount = (tpl.rows || []).length;
-    const colCount = (tpl.columns || []).length;
+  computeMergedGridMap(sheetOrTpl) {
+    const rows = sheetOrTpl.rows || [];
+    const cols = sheetOrTpl.columns || [];
+    const rowCount = rows.length;
+    const colCount = cols.length;
     const gridMap = Array.from({ length: rowCount }, () =>
       Array.from({ length: colCount }, () => ({ skip: false, rowspan: 1, colspan: 1 }))
     );
 
     for (let rIdx = 0; rIdx < rowCount; rIdx++) {
-      const row = tpl.rows[rIdx];
+      const row = rows[rIdx];
       if (!row || row.isSection) continue;
 
       for (let cIdx = 0; cIdx < colCount; cIdx++) {
         if (gridMap[rIdx][cIdx].skip) continue;
 
-        const col = tpl.columns[cIdx];
+        const col = cols[cIdx];
         const cell = (row.cells && row.cells[col.id]) || {};
 
         let colspan = Math.max(1, Math.min(parseInt(cell.colspan, 10) || 1, colCount - cIdx));
@@ -419,7 +448,7 @@ window.App = {
 
         let maxAvailRows = 1;
         for (let dr = 1; rIdx + dr < rowCount; dr++) {
-          if (tpl.rows[rIdx + dr].isSection) break;
+          if (rows[rIdx + dr].isSection) break;
           maxAvailRows++;
         }
         const rowspan = Math.max(1, Math.min(parseInt(cell.rowspan, 10) || 1, maxAvailRows));
@@ -467,38 +496,138 @@ window.App = {
   },
 
   /**
-   * 計算加總欄位 (SUM) 數值
+   * 將欄位英文字母 (A, B, C... Z, AA) 轉為 0-based 欄位索引
    */
-  computeSumCellValue(template, rowObj, colObj, cellValues) {
+  colLettersToIndex(letters) {
+    let idx = 0;
+    const up = String(letters || '').toUpperCase();
+    for (let i = 0; i < up.length; i++) {
+      idx = idx * 26 + (up.charCodeAt(i) - 64);
+    }
+    return idx - 1;
+  },
+
+  /**
+   * 依據列索引 (0-based) 與欄索引 (0-based) 取得該儲存格的數值（支援遞迴取得其他加總格的值，並防範循環參照）
+   */
+  getNumericValueAtCoord(sheetObj, rIdx, cIdx, cellValues, visitedSet) {
+    const rows = sheetObj.rows || [];
+    const cols = sheetObj.columns || [];
+    if (rIdx < 0 || rIdx >= rows.length || cIdx < 0 || cIdx >= cols.length) return 0;
+
+    const r = rows[rIdx];
+    const c = cols[cIdx];
+    if (!r || r.isSection || !c) return 0;
+
+    const visitKey = `${r.id}_${c.id}`;
+    if (visitedSet.has(visitKey)) return 0;
+
+    const cellDef = (r.cells && r.cells[c.id]) || {};
+    const eff = Object.assign({}, c, cellDef.override || {});
+
+    if (eff.type === 'sum') {
+      const nextVisited = new Set(visitedSet);
+      nextVisited.add(visitKey);
+      const nestedVal = parseFloat(this.computeSumCellValue(sheetObj, r, c, cellValues, nextVisited));
+      return isNaN(nestedVal) ? 0 : nestedVal;
+    }
+
+    const rawVal = (cellValues && cellValues[r.id] && cellValues[r.id][c.id] !== undefined)
+      ? cellValues[r.id][c.id]
+      : cellDef.value;
+    const num = parseFloat(rawVal);
+    return isNaN(num) ? 0 : num;
+  },
+
+  /**
+   * 計算加總欄位 (SUM) 數值：
+   * 支援：
+   * 1. 指定座標四則運算（例如：C1 = A1 + B1、=A1+B1、A2+B2-C2、A1*B1）
+   * 2. 指定座標範圍（例如：A1:B3、SUM(A1:A5)）
+   * 3. COL_SUM（本欄上方自動加總）與 ROW_SUM（同列左側自動加總）
+   */
+  computeSumCellValue(sheetOrTpl, rowObj, colObj, cellValues, visitedSet = new Set()) {
+    const rows = sheetOrTpl.rows || [];
+    const cols = sheetOrTpl.columns || [];
     const cellCfg = (rowObj.cells && rowObj.cells[colObj.id]) || {};
     const eff = Object.assign({}, colObj, cellCfg.override || {});
-    const formula = (eff.formula || 'COL_SUM').trim().toUpperCase();
+    let rawFormula = String(eff.formula || 'COL_SUM').trim().toUpperCase();
 
-    let sum = 0;
-    if (formula === 'COL_SUM') {
-      for (const r of template.rows) {
+    const currentVisitKey = `${rowObj.id}_${colObj.id}`;
+    visitedSet.add(currentVisitKey);
+
+    if (!rawFormula || rawFormula === 'COL_SUM') {
+      let sum = 0;
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
         if (r.id === rowObj.id) break;
         if (r.isSection) continue;
-        const rawVal = cellValues?.[r.id]?.[colObj.id] ?? r.cells?.[colObj.id]?.value;
-        const num = parseFloat(rawVal);
-        if (!isNaN(num)) sum += num;
+        const cIdx = cols.findIndex(x => x.id === colObj.id);
+        sum += this.getNumericValueAtCoord(sheetOrTpl, i, cIdx, cellValues, visitedSet);
       }
-    } else if (formula === 'ROW_SUM') {
-      for (const c of template.columns) {
+      return Number.isInteger(sum) ? String(sum) : Number(sum.toFixed(2)).toString();
+    }
+
+    if (rawFormula === 'ROW_SUM') {
+      let sum = 0;
+      const rIdx = rows.findIndex(x => x.id === rowObj.id);
+      for (let j = 0; j < cols.length; j++) {
+        const c = cols[j];
         if (c.id === colObj.id) break;
-        const rawVal = cellValues?.[rowObj.id]?.[c.id] ?? rowObj.cells?.[c.id]?.value;
-        const num = parseFloat(rawVal);
-        if (!isNaN(num)) sum += num;
+        sum += this.getNumericValueAtCoord(sheetOrTpl, rIdx, j, cellValues, visitedSet);
+      }
+      return Number.isInteger(sum) ? String(sum) : Number(sum.toFixed(2)).toString();
+    }
+
+    // 支援使用者輸入 "C1 = A1 + B1" 或 "= A1 + B1"：自動剝除左側目標座標與等號
+    let expr = rawFormula.replace(/^[A-Z]+\d+\s*=\s*/, '').replace(/^=\s*/, '').trim();
+
+    // 1. 先展開 SUM(A1:B3) 或 A1:B3 區間語法
+    const expandRange = (match, startColStr, startRowStr, endColStr, endRowStr) => {
+      const c1 = this.colLettersToIndex(startColStr);
+      const r1 = parseInt(startRowStr, 10) - 1;
+      const c2 = this.colLettersToIndex(endColStr);
+      const r2 = parseInt(endRowStr, 10) - 1;
+      let rangeSum = 0;
+      for (let r = Math.min(r1, r2); r <= Math.max(r1, r2); r++) {
+        for (let c = Math.min(c1, c2); c <= Math.max(c1, c2); c++) {
+          rangeSum += this.getNumericValueAtCoord(sheetOrTpl, r, c, cellValues, visitedSet);
+        }
+      }
+      return `(${rangeSum})`;
+    };
+
+    expr = expr.replace(/SUM\(\s*([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\s*\)/g, expandRange);
+    expr = expr.replace(/\b([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\b/g, expandRange);
+
+    // 2. 將單一儲存格座標 (如 A1, B1, D12) 替換為實際數值
+    expr = expr.replace(/\b([A-Z]+)(\d+)\b/g, (match, colLetters, rowDigits) => {
+      const cIdx = this.colLettersToIndex(colLetters);
+      const rIdx = parseInt(rowDigits, 10) - 1;
+      const val = this.getNumericValueAtCoord(sheetOrTpl, rIdx, cIdx, cellValues, visitedSet);
+      return `(${val})`;
+    });
+
+    // 3. 安全計算四則運算表達式
+    if (/^[0-9+\-*/().\s]+$/.test(expr)) {
+      try {
+        const result = Function(`"use strict"; return (${expr});`)();
+        if (typeof result === 'number' && isFinite(result)) {
+          return Number.isInteger(result) ? String(result) : Number(result.toFixed(2)).toString();
+        }
+      } catch (e) {
+        return '公式錯誤';
       }
     }
-    return Number.isInteger(sum) ? String(sum) : sum.toFixed(2);
+    return '0';
   },
 
   /**
    * 開啟 A4 PDF 預覽與匯出彈窗
    */
-  openPdfModal(recordId) {
+  openPdfModal(recordId, initialSheetIdx = 0) {
     this.pdfTargetRecordId = recordId;
+    this.pdfActiveSheetIdx = initialSheetIdx || 0;
     document.getElementById('pdf-modal').classList.remove('hidden');
     this.refreshPdfModal();
   },
@@ -507,17 +636,49 @@ window.App = {
     document.getElementById('pdf-modal').classList.add('hidden');
   },
 
+  changePdfSheetIndex(idx) {
+    this.pdfActiveSheetIdx = parseInt(idx, 10) || 0;
+    this.refreshPdfModal();
+  },
+
   /**
    * 渲染 A4 預覽與匯出內容：
-   * - 右上角不顯示表單編號、定檢月份、點檢日期
-   * - 移除「綜合備註與異常說明：無異常事項。」欄位
-   * - 簽核格自動置於 A4 最底部
+   * - 不顯示表頭列 (<thead>)
+   * - 支援多工作表分頁切換
+   * - 自動計算縮放比例，將表單縮放成單一 A4 頁面大小（表單與底部簽核格顯示在同一頁）
    */
   refreshPdfModal() {
     const rec = DB.state.records.find(r => r.id === this.pdfTargetRecordId);
     if (!rec) return;
     const tpl = DB.state.templates.find(t => t.id === rec.templateId);
     if (!tpl) return;
+
+    const sheets = this.ensureTemplateSheets(tpl);
+    if (this.pdfActiveSheetIdx >= sheets.length) this.pdfActiveSheetIdx = 0;
+    const activeSheet = sheets[this.pdfActiveSheetIdx] || sheets[0];
+
+    // 若此表單有多個分頁，於預覽工具列動態注入分頁切換選單
+    let sheetSelectEl = document.getElementById('pdf-sheet-selector');
+    if (sheets.length > 1) {
+      if (!sheetSelectEl) {
+        const orientEl = document.getElementById('pdf-orientation');
+        if (orientEl && orientEl.parentNode) {
+          sheetSelectEl = document.createElement('select');
+          sheetSelectEl.id = 'pdf-sheet-selector';
+          sheetSelectEl.className = 'bg-emerald-800 border border-emerald-500 rounded-lg px-2.5 py-1 text-xs text-white font-bold';
+          sheetSelectEl.onchange = function () { App.changePdfSheetIndex(this.value); };
+          orientEl.parentNode.insertBefore(sheetSelectEl, orientEl);
+        }
+      }
+      if (sheetSelectEl) {
+        sheetSelectEl.classList.remove('hidden');
+        sheetSelectEl.innerHTML = sheets.map((sh, idx) =>
+          `<option value="${idx}" ${idx === this.pdfActiveSheetIdx ? 'selected' : ''}>分頁：${sh.name}</option>`
+        ).join('');
+      }
+    } else if (sheetSelectEl) {
+      sheetSelectEl.classList.add('hidden');
+    }
 
     const orient = document.getElementById('pdf-orientation').value;
     const container = document.getElementById('pdf-render-container');
@@ -539,15 +700,15 @@ window.App = {
       `;
     };
 
-    const gridMap = this.computeMergedGridMap(tpl);
+    const gridMap = this.computeMergedGridMap(activeSheet);
     let rowsHtml = '';
 
-    tpl.rows.forEach((r, rIdx) => {
+    activeSheet.rows.forEach((r, rIdx) => {
       const rowHeightStyle = r.height ? `style="height:${r.height}px"` : '';
       if (r.isSection) {
         rowsHtml += `
           <tr ${rowHeightStyle}>
-            <td colspan="${tpl.columns.length}" class="bg-slate-200 font-bold text-left px-2 py-1.5 text-xs">
+            <td colspan="${activeSheet.columns.length}" class="bg-slate-200 font-bold text-left px-2 py-1.5 text-xs">
               ${r.sectionTitle}
             </td>
           </tr>
@@ -556,7 +717,7 @@ window.App = {
       }
 
       rowsHtml += `<tr ${rowHeightStyle}>`;
-      tpl.columns.forEach((c, cIdx) => {
+      activeSheet.columns.forEach((c, cIdx) => {
         const mapInfo = gridMap[rIdx]?.[cIdx];
         if (mapInfo && mapInfo.skip) return;
 
@@ -574,7 +735,7 @@ window.App = {
         if (eff.type === 'checkbox') {
           displayHtml = val ? `☑ ${eff.checkLabel || '正常'}` : `☐ 未勾選`;
         } else if (eff.type === 'sum') {
-          const sumVal = this.computeSumCellValue(tpl, r, c, rec.cellValues);
+          const sumVal = this.computeSumCellValue(activeSheet, r, c, rec.cellValues);
           displayHtml = `<strong>${sumVal}${eff.unit ? ' ' + eff.unit : ''}</strong>`;
         } else if (eff.type === 'number') {
           const num = parseFloat(val);
@@ -592,32 +753,36 @@ window.App = {
     });
 
     container.innerHTML = `
-      <!-- 上半部：表單標題與定檢表格（已移除右上角表單編號、定檢月份、點檢日期） -->
-      <div class="w-full">
-        <div class="border-b-2 border-slate-900 pb-2.5 mb-3">
-          <h2 class="text-xl font-black tracking-wide text-center">${tpl.name}</h2>
+      <!-- 上半部：表單標題與自動縮放定檢表格（已移除表頭列顯示） -->
+      <div id="pdf-top-section" class="w-full overflow-hidden">
+        <div id="pdf-header-title" class="border-b-2 border-slate-900 pb-2 mb-2.5">
+          <h2 class="text-xl font-black tracking-wide text-center">
+            ${tpl.name}${sheets.length > 1 ? ` - ${activeSheet.name}` : ''}
+          </h2>
         </div>
 
-        <table class="pdf-table mb-3">
-          <thead>
-            <tr>
-              ${tpl.columns.map(c => `<th style="width:${c.width || 100}px; font-size:${c.fontSize || 12}px; text-align:${c.headerAlign || 'center'};">${c.title}</th>`).join('')}
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
-        </table>
+        <div id="pdf-table-scale-holder" class="w-full overflow-hidden">
+          <div id="pdf-table-scale-box" style="transform-origin: top left;">
+            <table class="pdf-table">
+              <colgroup>
+                ${activeSheet.columns.map(c => `<col style="width:${c.width || 100}px" />`).join('')}
+              </colgroup>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
-      <!-- 下半部：自動推至 A4 最下方之簽核格（已移除綜合備註與異常說明欄位） -->
-      <div class="w-full mt-auto pt-2">
+      <!-- 下半部：自動推至 A4 最下方之簽核格 -->
+      <div id="pdf-bottom-sign" class="w-full mt-auto pt-2 shrink-0">
         <table class="pdf-table">
           <thead>
             <tr>
-              <th class="w-1/3">檢查人</th>
-              <th class="w-1/3">股長</th>
-              <th class="w-1/3">課長</th>
+              <th class="w-1/3 bg-slate-100">檢查人</th>
+              <th class="w-1/3 bg-slate-100">股長</th>
+              <th class="w-1/3 bg-slate-100">課長</th>
             </tr>
           </thead>
           <tbody>
@@ -630,12 +795,64 @@ window.App = {
         </table>
       </div>
     `;
+
+    // 執行 A4 單頁自動縮放計算
+    requestAnimationFrame(() => {
+      this.autoFitPdfToSingleA4();
+    });
   },
 
   /**
-   * 匯出並下載 PDF
+   * 自動計算表格寬高與 A4 單頁可用空間比例，將表單等比例縮放至單頁 A4 內
+   */
+  autoFitPdfToSingleA4() {
+    const container = document.getElementById('pdf-render-container');
+    const titleEl = document.getElementById('pdf-header-title');
+    const holderEl = document.getElementById('pdf-table-scale-holder');
+    const scaleBoxEl = document.getElementById('pdf-table-scale-box');
+    const signEl = document.getElementById('pdf-bottom-sign');
+    if (!container || !holderEl || !scaleBoxEl || !signEl) return;
+
+    // 先重置縮放以量測原始表格寬高
+    scaleBoxEl.style.transform = 'none';
+    scaleBoxEl.style.width = 'auto';
+    holderEl.style.height = 'auto';
+
+    const style = window.getComputedStyle(container);
+    const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const padY = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+
+    const availWidth = container.clientWidth - padX;
+    const availHeight = container.clientHeight - padY - (titleEl ? titleEl.offsetHeight + 10 : 0) - signEl.offsetHeight - 12;
+
+    const tableEl = scaleBoxEl.querySelector('table');
+    if (!tableEl) return;
+
+    const naturalWidth = Math.max(tableEl.scrollWidth, tableEl.offsetWidth, 1);
+    const naturalHeight = Math.max(tableEl.scrollHeight, tableEl.offsetHeight, 1);
+
+    const scaleX = availWidth / naturalWidth;
+    const scaleY = availHeight / naturalHeight;
+    const scale = Math.min(1, scaleX, scaleY);
+
+    if (scale < 1) {
+      scaleBoxEl.style.width = `${naturalWidth}px`;
+      scaleBoxEl.style.transform = `scale(${scale})`;
+      holderEl.style.width = `${availWidth}px`;
+      holderEl.style.height = `${Math.ceil(naturalHeight * scale)}px`;
+    } else {
+      scaleBoxEl.style.width = '100%';
+      scaleBoxEl.style.transform = 'none';
+      holderEl.style.width = '100%';
+      holderEl.style.height = `${naturalHeight}px`;
+    }
+  },
+
+  /**
+   * 匯出並下載 PDF（確保縮放成單一 A4 頁面）
    */
   downloadPdfFile() {
+    this.autoFitPdfToSingleA4();
     const rec = DB.state.records.find(r => r.id === this.pdfTargetRecordId);
     const orient = document.getElementById('pdf-orientation').value;
     const element = document.getElementById('pdf-render-container');
@@ -650,8 +867,10 @@ window.App = {
       pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
     }).from(element).toPdf().get('pdf').then((pdf) => {
       const totalPages = pdf.internal.getNumberOfPages();
-      if (totalPages > 1 && element.scrollHeight < 1150) {
-        pdf.deletePage(totalPages);
+      if (totalPages > 1) {
+        for (let p = totalPages; p > 1; p--) {
+          pdf.deletePage(p);
+        }
       }
     }).save();
   },
